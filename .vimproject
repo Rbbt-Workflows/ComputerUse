@@ -1,9 +1,14 @@
 ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf" {
  workflow.rb
- chats=chats{
+ README.md
+ chats=chats filter="*"{
   document.rb
+  file_system_tasks
   orders_format
   test_ls
+
+  rag
+
  }
  bin=bin filter="*"{
  }

@@ -7,45 +7,6 @@ module ComputerUse
   task current_time: :string do
     Time.now.to_s
   end
-  export_exec :current_time
-
-  input :dir, :path, "Directory", nil, required: true
-  input :recursive, :boolean, "List recursively with -R", false
-  desc "Use the ls tool to list directories, defaults to -la"
-  task :list_files => :string do |dir,recursive|
-    if recursive
-      CMD.cmd(:ls, "-la '#{dir}'")
-    else
-      CMD.cmd(:ls, "-laR '#{dir}'")
-    end
-  end
-
-  input :path, :path, "File path", nil, required: true
-  input :max, :integer, "Show only the top max lines. All if set to 0 ", 0
-  desc "Use the cat tool to get the content of a file, or use head -n $max if max is not 0"
-  task :read_file => :string do |filename,max|
-    if max.to_i == 0
-      CMD.cmd(:cat, "'#{filename}'")
-    else
-      CMD.cmd(:head, "-n #{max} '#{filename}'")
-    end
-  end
-
-  input :path, :path, "File path", nil, required: true
-  input :content, :string, "Content of the file"
-  desc "Write a file, the path should be relative to the current directory or an exception will be raised"
-  task :write_file => :string do |filename,content|
-    filename = './' + filename unless Path.located?(filename) || filename.start_with?('.')
-    filename = filename.find if Path === filename
-
-    if ! Misc.path_relative_to?(Dir.pwd, File.expand_path(filename))
-      raise "Path not relative to PWD"
-    else
-      Open.write filename, content
-      "saved #{filename}"
-    end
-  end
-  export :list_files, :read_file, :write_file
 
   input :pdf, :path, "Pdf file", nil, required: true
   extension :md
@@ -71,4 +32,8 @@ module ComputerUse
     html = Open.open(html) if Open.remote?(html)
     CMD.cmd(:html2markdown, in: html)
   end
+
+  export_exec :current_time
+  export :pdf2md_full
+  export :pdf2md
 end
