@@ -7,16 +7,29 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
   orders_format
   test_ls
 
+  ruby
+
   rag
+
+  tasks_ruby
 
  }
  bin=bin filter="*"{
  }
  lib=lib {
+  ComputerUse=ComputerUse{
+   tasks=tasks{
+    documents.rb
+    ruby.rb
+   }
+  }
  }
  test=test {
   test_helper.rb
  }
- data=data filter="*"{
+ share=share filter="*"{
+  scout_commands=scout_commands{
+   refactor
+  }
  }
 }

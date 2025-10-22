@@ -1,0 +1,96 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'scout'
+
+cmd = $previous_commands ?
+  "scout #{$previous_commands.any? ? "#{$previous_commands * ' '} " : ''}#{File.basename(__FILE__)}" :
+  $PROGRAM_NAME
+
+options = SOPT.setup <<~EOF
+
+Use agents to fix code
+
+$ #{cmd} [<options>] <code> <test> <question> 
+
+-h--help Print this help
+-i--imports* Chat files to import, separated by comma
+EOF
+if options[:help]
+  if defined? scout_usage
+    scout_usage
+  else
+    puts SOPT.doc
+  end
+  exit 0
+end
+
+code, test, *question = ARGV
+
+question = question.empty? ? nil : question * " "
+
+raise MissingParameterException, :code unless code
+
+imports = IndiferentHash.process_options options, :imports
+
+imports = imports.split(/,\s*/) if imports
+
+coordinator = LLM.agent
+
+coordinator.start_chat.tool 'ComputerUse', 'read', "file=#{code}"
+coordinator.start_chat.tool 'ComputerUse', 'ruby', "file=#{code}"
+coordinator.start_chat.tool 'ComputerUse', 'write', "file=#{test}", 'content'
+
+coordinator.file code
+coordinator.file test
+
+import.each do |import|
+  coordinator.import import
+end
+
+coordinator.start_chat.user <<-EOF
+
+Please fix the file #{code}. The file #{test} contains
+a test the should help you debug the code. 
+
+You are in charge of fixing the code, but you can only run the tests and read
+the file with the code. The changes need to be made by a different agent. You
+may delegate the edition tasks to him. He can be called with a prompt. He has
+been instructed on how to read and edit the code file, but he cannot run the
+test himself.
+
+You may change the test code yourself.
+
+Make the developer write the version of the code and make sure that the test
+proves that the information is being retrieved.
+
+Iterate until it is working. You make start a new conversation with the developer agent
+at any time, it will make it forget previous iterations, so use it when fixing
+an unrelated issue.
+EOF
+
+coordinator.start_chat.user question if question 
+
+developer = LLM.agent
+developer.start_chat.tool 'ComputerUse', 'write', "file=#{code}", 'content'
+developer.start_chat.tool 'ComputerUse', 'read', "file=#{code}"
+
+developer.start_chat.system <<-EOF
+You are a developer.
+
+You are going to get asked to refactor a file of code. You may use
+the 'read' tool to retrieve the code and you may save a new version
+with the 'write' tool, passing the content as a parameter. Both
+tools are configured to work on a file that your suppervisor will
+test. 
+
+Since your supervisor will be comming back to you for more edits, expect to be
+asked to add logs and to fix particular issues.
+EOF
+
+coordinator.delegate developer, :developer, "An software developer agent"
+
+ppp coordinator.chat
+
+coordinator.save 'coordinator.chat'
+developer.save 'developer.chat'
