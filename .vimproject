@@ -19,8 +19,10 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  lib=lib {
   ComputerUse=ComputerUse{
    tasks=tasks{
+    filesystem.rb
     documents.rb
     ruby.rb
+    exec.rb
     scout.rb
    }
   }

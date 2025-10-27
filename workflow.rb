@@ -14,5 +14,7 @@ module ComputerUse
 end
 
 require_relative 'lib/ComputerUse/tasks/documents'
+require_relative 'lib/ComputerUse/tasks/filesystem'
 require_relative 'lib/ComputerUse/tasks/ruby'
+require_relative 'lib/ComputerUse/tasks/exec'
 
