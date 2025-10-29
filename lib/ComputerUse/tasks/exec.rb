@@ -21,4 +21,6 @@ and STDERR outputs as strings, and exit_status, the exit status of the process
   task 'bash' => :text do |cmd|
     cmd_json cmd
   end
+
+  export_exec :bash
 end

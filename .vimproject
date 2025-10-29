@@ -13,6 +13,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
 
   tasks_ruby
 
+  query
+
  }
  bin=bin filter="*"{
  }
@@ -21,6 +23,7 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
    tasks=tasks{
     filesystem.rb
     documents.rb
+    web.rb
     ruby.rb
     exec.rb
     scout.rb

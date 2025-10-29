@@ -20,7 +20,13 @@ module ComputerUse
 
   input :html, :text, "HTML code, or url", nil, required: true
   task html2md: :text do |html|
-    html = Open.open(html) if Open.remote?(html)
+    if Open.remote?(html)
+      begin
+        html = Open.open(html)
+      rescue
+        raise ScoutException, $!.message
+      end
+    end
     CMD.cmd(:html2markdown, in: html)
   end
 

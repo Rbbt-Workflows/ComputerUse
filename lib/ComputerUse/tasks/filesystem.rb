@@ -3,9 +3,15 @@ module ComputerUse
   singleton_class.attr_accessor :root
 
   helper :root_holds_file do |path|
-    raise ParameterException, "File #{path} does not exist" unless Open.exists?(path) || Open.directory?(path)
-    if File.expand_path(ComputerUse.root) != File.expand_path(path)
-      if Misc.path_relative_to(File.expand_path(ComputerUse.root), path).nil?
+    return true if File.expand_path(ComputerUse.root) == File.expand_path(path)
+
+    if Open.exists?(path) || Open.directory?(path)
+      return true if Open.realpath(ComputerUse.root) == Open.realpath(path)
+      if Misc.path_relative_to(Open.realpath(ComputerUse.root), Open.realpath(path)).nil?
+        raise ParameterException, "File #{path} not under #{ComputerUse.root}"
+      end
+    else
+      if Misc.path_relative_to(File.expand_path(ComputerUse.root), File.expand_path(path)).nil?
         raise ParameterException, "File #{path} not under #{ComputerUse.root}"
       end
     end
@@ -17,10 +23,11 @@ Write a file.
   input :file, :path, 'File to write', nil, required: true
   input :content, :text, 'Content to write into the file', nil, required: true
   task :write => :string do |file,content|
-    root_holds_file file
     file = file.find if Path === file
     file = File.expand_path(file)
+    root_holds_file file
     Open.write file, content
+    "success writing to #{file}"
   end
 
   desc <<-EOF
@@ -34,7 +41,7 @@ Read a file. Don't specify a limit to read it complete. If you specify a limit s
 
     raise ParameterException, 'File is really a directory, can not read' if Open.directory?(file)
     text = Open.read file
-    if limit
+    if limit && limit.to_i > 0
       limit = limit.to_i
       if limit > 0
         lines = text.split("\n")
@@ -61,7 +68,7 @@ List all the files and subdirectories in a directory and returns the files and
 directories separatedly, and optionaly some file stats like size, and
 modification time.
 
-Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {size: 100, mtime=#{Time.now}}}, 'bar/bar' => {size: 200, mtime=#{Time.now - 100}}} }
+Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {size: 100, mtime='2025-10-2 15:00:00'}}, 'bar/bar' => {size: 200, mtime='2025-10-3 15:30:10'}} }
   EOF
   input :directory, :path, 'Directory to list', nil, required: true
   input :recursive, :boolean, 'List recursively', true
@@ -100,7 +107,6 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
   end
 
   desc <<-EOF
-
 Return stats if a file.
 
 Stats: size, modification time, binary or
@@ -124,4 +130,11 @@ not, number of lines (if not binary), etc
   end
 
   export_exec :list_directory, :write, :read, :file_stats
+
+  desc 'Return the current process working directory (PWD)'
+  task :pwd => :string do
+    Dir.pwd
+  end
+
+  export_exec :list_directory, :write, :read, :file_stats, :pwd
 end
