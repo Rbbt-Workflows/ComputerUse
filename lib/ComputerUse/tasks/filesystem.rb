@@ -2,11 +2,12 @@ module ComputerUse
   @root = Dir.pwd
   singleton_class.attr_accessor :root
 
-  helper :root_holds_file do |path|
-    return true if File.expand_path(ComputerUse.root) == File.expand_path(path)
+  helper :normalize do |path|
+    path = "./#{path}" unless path.start_with?('/')
+    return path if File.expand_path(ComputerUse.root) == File.expand_path(path)
 
     if Open.exists?(path) || Open.directory?(path)
-      return true if Open.realpath(ComputerUse.root) == Open.realpath(path)
+      return path if Open.realpath(ComputerUse.root) == Open.realpath(path)
       if Misc.path_relative_to(Open.realpath(ComputerUse.root), Open.realpath(path)).nil?
         raise ParameterException, "File #{path} not under #{ComputerUse.root}"
       end
@@ -15,6 +16,7 @@ module ComputerUse
         raise ParameterException, "File #{path} not under #{ComputerUse.root}"
       end
     end
+    return path
   end
 
   desc <<-EOF
@@ -23,9 +25,7 @@ Write a file.
   input :file, :path, 'File to write', nil, required: true
   input :content, :text, 'Content to write into the file', nil, required: true
   task :write => :string do |file,content|
-    file = file.find if Path === file
-    file = File.expand_path(file)
-    root_holds_file file
+    file = normalize file
     Open.write file, content
     "success writing to #{file}"
   end
@@ -37,7 +37,7 @@ Read a file. Don't specify a limit to read it complete. If you specify a limit s
   input :limit, :integer, 'Number of lines to return from chosend end of the file'
   input :file_end, :select, 'Side of file to read', :head, select_options: %w(head tail)
   task :read => :text do |file,limit,file_end,root|
-    root_holds_file file
+    normalize file
 
     raise ParameterException, 'File is really a directory, can not read' if Open.directory?(file)
     text = Open.read file
@@ -75,7 +75,7 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
   input :stats, :boolean, 'Return some stats for the files', false
   extension :json
   task :list_directory => :text do |directory,recursive,stats|
-    root_holds_file directory
+    normalize directory
     files = if recursive
               Path.setup(directory).glob('**/**')
             else
@@ -116,7 +116,7 @@ not, number of lines (if not binary), etc
   input :file, :path, 'File with stats to report', nil, required: true
   extension :json
   task :file_stats => :text do |file,root|
-    root_holds_file file
+    normalize file
     file = Path.setup(file)
     stats = {}
     stats[:type] = file.directory? ? :directory : :file
