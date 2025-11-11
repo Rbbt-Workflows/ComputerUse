@@ -2,7 +2,7 @@ module ComputerUse
   input :pdf, :path, "Pdf file", nil, required: true
   extension :md
   task pdf2md_full: :text do |pdf|
-    CMD.cmd(:docling, "#{pdf} --output #{self.files_dir}")
+    CMD.cmd(:docling, "'#{pdf}' --output '#{self.files_dir}'")
     Open.mv file(files.first), self.tmp_path
     nil
   end
