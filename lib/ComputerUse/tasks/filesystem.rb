@@ -33,33 +33,70 @@ Write a file.
   desc <<-EOF
 Read a file. Don't specify a limit to read it complete. If you specify a limit specify a file_end which can be head or tail
   EOF
+
+  desc <<-EOF
+Read a file. Don't specify a limit to read it complete. If you specify a limit specify a file_end which can be head or tail.
+You may also specify start (line offset). For head start is 0-based from the beginning; for tail start is 0-based from the end (0 == last line).
+  EOF
   input :file, :path, 'Path to the file to read', nil, required: true
-  input :limit, :integer, 'Number of lines to return from chosend end of the file'
+  input :limit, :integer, 'Number of lines to return from chosen end of the file'
   input :file_end, :select, 'Side of file to read', :head, select_options: %w(head tail)
-  task :read => :text do |file,limit,file_end,root|
-    normalize file
+  input :start, :integer, 'Line offset: for head -> 0-based from start; for tail -> 0-based from end (0 == last line)', 0
+  task :read => :text do |file, limit, file_end, start|
+    file = normalize file
 
     raise ParameterException, 'File is really a directory, can not read' if Open.directory?(file)
-    text = Open.read file
-    if limit && limit.to_i > 0
-      limit = limit.to_i
-      if limit > 0
-        lines = text.split("\n")
-        next text if lines.length <= limit
 
-        case file_end.to_s
-        when 'head'
-          lines[0..limit-1] * "\n"
-        when 'tail'
-          lines[limit-1..-1] * "\n"
-        else
-          raise ParameterException, "Unknown file_end must be head or tail: #{Log.fingerprint file_end}"
+    # no limit -> read full file (same behaviour as before)
+    unless limit && limit.to_i > 0
+      next Open.read(file)
+    end
+
+    limit = limit.to_i
+    raise ParameterException, "Wrong limit: #{Log.fingerprint limit}" if limit <= 0
+
+    start = (start || 0).to_i
+    raise ParameterException, "Wrong start: #{Log.fingerprint start}" if start < 0
+
+    case file_end.to_s
+    when '', 'head'
+      # Read from the start (or from start offset) without loading whole file
+      lines = []
+      File.open(file, 'rb') do |f|
+        f.each_line.with_index do |ln, idx|
+          next if idx < start
+          lines << (ln.chomp)
+          break if lines.length >= limit
         end
-      else
-        raise ParameterException, "Wrong limit: #{Log.fingerprint limit}"
       end
+      lines.join("\n")
+    when 'tail'
+      # Efficiently collect lines from the end without loading the whole file.
+      # We need limit + start lines from the end, then drop the first `start`
+      needed = limit + start
+      buffer = ''
+      File.open(file, 'rb') do |f|
+        f.seek(0, IO::SEEK_END)
+        pos = f.pos
+        # read backwards in blocks until we have enough newlines or we reached start
+        while pos > 0 && buffer.count("\n") <= needed
+          read_size = [pos, 8192].min
+          pos -= read_size
+          f.seek(pos, IO::SEEK_SET)
+          buffer = f.read(read_size) + buffer
+        end
+      end
+
+      # Split into lines. If the file ends with newline, split will give last element '' — using split("\n") gives predictable behaviour.
+      arr = buffer.split("\n")
+      # choose the last `needed` lines (or fewer if file smaller)
+      start_index = [arr.length - needed, 0].max
+      selected = arr[start_index, needed] || []
+      # drop `start` lines from the front of the selected portion, then take `limit`
+      result = (selected[start, limit] || [])
+      result.join("\n")
     else
-      text
+      raise ParameterException, "Unknown file_end must be head or tail: #{Log.fingerprint file_end}"
     end
   end
 
