@@ -10,7 +10,7 @@ module ComputerUse
   # Set the environment variable: export BRAVE_API_KEY="your_key_here"
   input :query, :string, 'Search query string', nil, required: true
 
-  task :duckduckgo => :json do |query|
+  task :brave => :json do |query|
     # Check for API key
     api_key = ENV['BRAVE_API_KEY']
 
@@ -69,5 +69,5 @@ module ComputerUse
     results
   end
 
-  export_exec :duckduckgo
+  export_exec :brave
 end
