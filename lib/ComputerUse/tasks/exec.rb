@@ -1,12 +1,11 @@
 module ComputerUse
 
-  helper :cmd_json do |tool,cmd=nil,options={}|
+  helper :cmd_json do |tool, cmd, options={}|
     begin
-      io = CMD.cmd(tool, cmd, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
+      io = CMD.cmd(tool, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true, in: cmd))
       {stdout: io.read, stderr: io.std_err, exit_status: io.exit_status}
-    rescue
-      raise $!
-      raise ScoutException 
+    rescue => e
+      raise ScoutException, e.message
     end
   end
 
@@ -16,10 +15,10 @@ Run a bash command.
 Returns a JSON object with two keys, stderr and stdout, pointing to the STDOUT
 and STDERR outputs as strings, and exit_status, the exit status of the process
   EOF
-  input :cmd, :string, 'Bash command to run to run', nil, required: true
+  input :cmd, :string, 'Bash command to run', nil, required: true
   extension :json
   task 'bash' => :text do |cmd|
-    cmd_json cmd
+    cmd_json :bash, cmd
   end
 
   desc <<-EOF
@@ -66,8 +65,8 @@ stderr and exit_status.
       text = io.read
       io.join
       {stdout: text, stderr: io.std_err, exit_status: io.exit_status}
-    rescue
-      raise ScoutException, io.std_err
+    rescue => e
+      raise ScoutException, e.message
     end
   end
 
