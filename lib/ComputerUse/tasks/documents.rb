@@ -23,8 +23,8 @@ module ComputerUse
     if Open.remote?(html)
       begin
         html = Open.open(html)
-      rescue
-        raise ScoutException, $!.message
+      rescue => e
+        raise ScoutException, e.message
       end
     end
     CMD.cmd(:html2markdown, in: html)
@@ -97,16 +97,19 @@ module ComputerUse
     # deduplicate near-identical excerpts and trim whitespace
     excerpts.map! { |e| e.strip }
     excerpts.uniq!
+
+    ids = []
     excerpts.each do |excerpt|
       id = Misc.digest excerpt
       file(id).write excerpt
+      ids << id
     end
 
-    files
+    ids
   end
 
   dep :excerpts
-  input :embed_model, :string, "Embeding model", 'mxbai-embed-large', required: false
+  input :embed_model, :string, "Embedding model", 'mxbai-embed-large', required: false
   extension :rag
   task :rag => :binary  do |embed_model|
     require 'scout/llm/rag'
