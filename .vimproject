@@ -2,6 +2,9 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  workflow.rb
  README.md
  chats=chats filter="*"{
+  read_file
+
+
   document.rb
   file_system_tasks
   orders_format
