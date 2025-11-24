@@ -29,7 +29,6 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
     web.rb
     ruby.rb
     exec.rb
-    scout.rb
    }
   }
  }
