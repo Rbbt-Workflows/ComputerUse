@@ -3,6 +3,9 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  README.md
  chats=chats filter="*"{
 
+  test_patch
+  
+
   intro
 
   sandbox
@@ -32,6 +35,7 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
     filesystem.rb
     documents.rb
     web.rb
+    patch.rb
     exec.rb
    }
   }
