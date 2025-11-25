@@ -161,10 +161,10 @@ module ComputerUse
   end
 
   desc <<-EOF
-Apply a patch in unified diff format to the files under ComputerUse.root.
+Apply a patch to the files under the current working directory #{Dir.pwd} using the patch command.
 
 Inputs:
-- patch: the patch content (unified diff or other format accepted by the `patch` utility)
+- patch: the patch content (unified diff or other format accepted by the `patch` utility; ChatGPT style patches will be converted)
 - strip: the -pN argument for the patch command (defaults to 0)
 - dry_run: if true, runs patch with --dry-run (check only, do not modify files)
 
@@ -187,7 +187,6 @@ Returns a JSON object with keys stdout, stderr and exit_status.
       # Include '-' so patch reads the patch from stdin explicitly.
       cmd = ["-p#{strip}"]
       cmd << '--dry-run' if dry_run
-      cmd << '-' # read patch from stdin
 
       # Pass the args array directly. Provide the patch content as stdin.
       cmd_json :patch, cmd, in: patch_text
