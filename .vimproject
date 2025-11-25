@@ -2,6 +2,11 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  workflow.rb
  README.md
  chats=chats filter="*"{
+
+  intro
+
+  sandbox
+
   read_file
 
 
@@ -27,7 +32,6 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
     filesystem.rb
     documents.rb
     web.rb
-    ruby.rb
     exec.rb
    }
   }
