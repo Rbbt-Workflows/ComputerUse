@@ -2,6 +2,7 @@ module ComputerUse
 
   helper :cmd_json do |tool, cmd, options={}|
     begin
+      cmd = cmd * ' ' if Array === cmd
       io = CMD.cmd(tool, cmd, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
       {stdout: io.read, stderr: io.std_err, exit_status: io.exit_status}
     rescue => e
@@ -71,8 +72,9 @@ stderr and exit_status.
 Run a file or code using ruby.
 
 If `file` is provided it will be executed. Otherwise `code` will be written to a temporary
-file under the task `root` and executed. Returns a JSON object with keys stdout,
-stderr and exit_status.
+file under the task `root` and executed. 
+
+Returns a JSON object with keys stdout, stderr and exit_status.
   EOF
   input :code, :text, 'Ruby code to run (ignored if file provided)'
   input :file, :path, 'File to run'
@@ -97,37 +99,7 @@ stderr and exit_status.
     end
   end
 
-  desc <<-EOF
-Apply a patch to the files under ComputerUse.root.
-
-Inputs:
-- patch: the patch content (unified diff or other format accepted by the `patch` utility)
-- strip: the -pN argument for the patch command (defaults to 0)
-- dry_run: if true, runs patch with --dry-run (check only, do not modify files)
-
-Returns patch output on success, raises ParameterException on failure.
-  EOF
-  input :patch, :text, 'Patch content', nil, required: true
-  input :strip, :integer, 'Number for patch -pN (strip count)', 0
-  input :dry_run, :boolean, 'If true, perform a dry-run (do not apply)', false
-  extension :json
-  task :patch => :text do |patch_text, strip, dry_run, root|
-    patch_text ||= ''
-    strip = (strip || 0).to_i
-    dry_run = !!dry_run
-
-    Dir.chdir(ComputerUse.root) do
-      # Build command; pass args directly to avoid shell.
-      cmd = ["-p#{strip}"]
-      cmd << '--dry-run' if dry_run
-
-      # Open the tempfile for reading to pass as stdin.
-      cmd_json :patch, cmd * ' ', in: patch_text
-    end
-  end
-
   export_exec :bash
   export_exec :python
   export_exec :ruby
-  export_exec :patch
 end
