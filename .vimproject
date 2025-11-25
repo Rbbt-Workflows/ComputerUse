@@ -2,11 +2,10 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  workflow.rb
  README.md
  chats=chats filter="*"{
+  intro
 
   test_patch
-  
 
-  intro
 
   sandbox
 
