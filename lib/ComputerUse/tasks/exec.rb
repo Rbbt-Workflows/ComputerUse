@@ -2,7 +2,7 @@ module ComputerUse
 
   helper :cmd_json do |tool, cmd, options={}|
     begin
-      io = CMD.cmd(tool, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true, in: cmd))
+      io = CMD.cmd(tool, cmd, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
       {stdout: io.read, stderr: io.std_err, exit_status: io.exit_status}
     rescue => e
       raise ScoutException, e.message
@@ -18,7 +18,7 @@ and STDERR outputs as strings, and exit_status, the exit status of the process
   input :cmd, :string, 'Bash command to run', nil, required: true
   extension :json
   task 'bash' => :text do |cmd|
-    cmd_json :bash, cmd
+    cmd_json :bash, nil, in: cmd
   end
 
   desc <<-EOF
@@ -37,8 +37,8 @@ stderr and exit_status.
       root_holds_file file
       target = file
     elsif code && !code.to_s.empty?
-      tmp = File.join(ComputerUse.root, "agent_script_#{Time.now.to_i}_#{rand(1000)}.py")
-      File.open(tmp, 'w') { |f| f.write(code) }
+      tmp = file('script')
+      tmp.write code
       target = tmp
     else
       raise ParameterException, 'Provide either a file or code to run'
@@ -61,10 +61,37 @@ stderr and exit_status.
     cmd_name ||= 'python'
 
     begin
-      io = CMD.cmd(cmd_name.to_sym, target, save_stderr: true, pipe: true)
-      text = io.read
-      io.join
-      {stdout: text, stderr: io.std_err, exit_status: io.exit_status}
+      cmd_json cmd_name, target
+    rescue => e
+      raise ScoutException, e.message
+    end
+  end
+
+  desc <<-EOF
+Run a file or code using ruby.
+
+If `file` is provided it will be executed. Otherwise `code` will be written to a temporary
+file under the task `root` and executed. Returns a JSON object with keys stdout,
+stderr and exit_status.
+  EOF
+  input :code, :text, 'Ruby code to run (ignored if file provided)'
+  input :file, :path, 'File to run'
+  extension :json
+  task :ruby => :text do |code, file|
+    # Prefer provided file, otherwise write code to a temp file in root
+    if file && !file.to_s.empty?
+      root_holds_file file
+      target = file
+    elsif code && !code.to_s.empty?
+      tmp = file('script')
+      tmp.write code
+      target = tmp
+    else
+      raise ParameterException, 'Provide either a file or code to run'
+    end
+
+    begin
+      cmd_json :ruby, target
     rescue => e
       raise ScoutException, e.message
     end
@@ -72,4 +99,5 @@ stderr and exit_status.
 
   export_exec :bash
   export_exec :python
+  export_exec :ruby
 end
