@@ -166,50 +166,7 @@ not, number of lines (if not binary), etc
     stats.to_json
   end
 
-  desc <<-EOF
-Apply a patch to the files under ComputerUse.root.
-
-Inputs:
-- patch: the patch content (unified diff or other format accepted by the `patch` utility)
-- strip: the -pN argument for the patch command (defaults to 0)
-- dry_run: if true, runs patch with --dry-run (check only, do not modify files)
-
-Returns patch output on success, raises ParameterException on failure.
-  EOF
-  input :patch, :text, 'Patch content', nil, required: true
-  input :strip, :integer, 'Number for patch -pN (strip count)', 0
-  input :dry_run, :boolean, 'If true, perform a dry-run (do not apply)', false
-  task :patch => :text do |patch_text, strip, dry_run, root|
-    patch_text ||= ''
-    strip = (strip || 0).to_i
-    dry_run = !!dry_run
-
-    # write patch to a temp file
-    Tempfile.open(['patch', '.diff']) do |tmp|
-      tmp.write(patch_text)
-      tmp.flush
-      tmp.close
-
-      Dir.chdir(ComputerUse.root) do
-        # Build command; pass args directly to avoid shell.
-        cmd = ['patch', "-p#{strip}"]
-        cmd << '--dry-run' if dry_run
-
-        # Open the tempfile for reading to pass as stdin.
-        File.open(tmp.path, 'r') do |stdin_file|
-          stdout, stderr, status = Open3.capture3(*cmd, stdin: stdin_file)
-          output = "#{stdout}#{stderr}"
-          if status.success?
-            return "Patch #{dry_run ? 'checked' : 'applied'} successfully:\n#{output}"
-          else
-            raise ParameterException, "Failed to apply patch:\n#{output}"
-          end
-        end
-      end
-    end
-  end
-
-  export_exec :list_directory, :write, :read, :file_stats, :patch
+  export_exec :list_directory, :write, :read, :file_stats
 
   desc 'Return the current process working directory (PWD)'
   task :pwd => :string do
