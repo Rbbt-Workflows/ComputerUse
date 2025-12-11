@@ -9,16 +9,6 @@ module ComputerUse
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
-      # Bind the ComputerUse.root writable so the sandbox can access repo files
-      begin
-        root_dir = ComputerUse.root
-        if root_dir && !root_dir.to_s.empty?
-          bwrap_args += ['--bind', root_dir.to_s, root_dir.to_s]
-        end
-      rescue => _e
-        # ignore if root not available
-      end
-
       # Also bind any additional writable dirs requested (e.g. self.files_dir)
       Array(writable_dirs).each do |d|
         next unless d
@@ -31,6 +21,17 @@ module ComputerUse
           bwrap_args += ['--ro-bind', p, p]
         end
       end
+
+      # Bind the ComputerUse.root writable so the sandbox can access repo files
+      begin
+        root_dir = ComputerUse.root
+        if root_dir && !root_dir.to_s.empty?
+          bwrap_args += ['--bind', root_dir.to_s, root_dir.to_s]
+        end
+      rescue => _e
+        # ignore if root not available
+      end
+
 
       # Ensure we chdir into the repo root if available
       if root_dir && !root_dir.to_s.empty?
