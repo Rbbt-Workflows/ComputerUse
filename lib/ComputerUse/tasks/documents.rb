@@ -3,6 +3,7 @@ module ComputerUse
   extension :md
   task pdf2md_full: :text do |pdf|
     CMD.cmd(:docling, "'#{pdf}' --output '#{self.files_dir}'")
+    raise ParameterException, "Nothing produced" if files.empty?
     Open.mv file(files.first), self.tmp_path
     nil
   end
