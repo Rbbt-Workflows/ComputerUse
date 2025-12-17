@@ -114,6 +114,8 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
   extension :json
   task :list_directory => :text do |directory,recursive,stats|
     directory = normalize directory
+    raise ParameterException, "Directory not found: #{directory}" unless Open.exists?(directory)
+    raise ParameterException, "Not a directory: #{directory}" unless Open.directory?(directory)
     files = if recursive
               Path.setup(directory).glob('**/*')
             else
@@ -155,6 +157,7 @@ not, number of lines (if not binary), etc
   extension :json
   task :file_stats => :text do |file,root|
     normalize file
+    raise ParameterException, "File not found: #{file}" unless Open.exists?(file)
     file = Path.setup(file)
     stats = {}
     stats[:type] = file.directory? ? :directory : :file

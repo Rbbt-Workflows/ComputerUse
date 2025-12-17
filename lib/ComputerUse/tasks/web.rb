@@ -33,7 +33,7 @@ module ComputerUse
     )
 
     unless response.success?
-      raise "Brave Search API returned status #{response.code}: #{response.body}"
+      raise ScoutException, "Brave Search API returned status #{response.code}: #{response.body}"
     end
 
     data = response.parsed_response
