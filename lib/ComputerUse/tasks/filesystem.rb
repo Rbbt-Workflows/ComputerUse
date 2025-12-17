@@ -45,6 +45,7 @@ You may also specify start (line offset). For head start is 0-based from the beg
   task :read => :text do |file, limit, file_end, start|
     file = normalize file
 
+    raise ParameterException, 'File not found' unless Open.exists?(file)
     raise ParameterException, 'File is really a directory, can not read' if Open.directory?(file)
 
     # no limit -> read full file (same behaviour as before)

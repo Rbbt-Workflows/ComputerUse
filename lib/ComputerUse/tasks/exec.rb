@@ -73,11 +73,23 @@ module ComputerUse
                    else
                      ['-c', cmd.to_s]
                    end
-                 elsif interpreter.start_with?('python') || interpreter == 'ruby'
+                 elsif interpreter.start_with?('python') || interpreter == 'ruby' || interpreter == 'Rscript' || interpreter == 'R'
+                   # For python, ruby and R-like interpreters prefer running files when a path is given.
                    if cmd && File.exist?(cmd.to_s)
-                     [cmd.to_s]
+                     if interpreter == 'R'
+                       # When using 'R' as the interpreter, supply flags to run a file non-interactively
+                       ['--slave', '-f', cmd.to_s]
+                     else
+                       [cmd.to_s]
+                     end
                    else
-                     stdin_data ? ['-'] : [cmd.to_s]
+                     # If no file, read from stdin when provided, otherwise pass the cmd as single arg
+                     if interpreter == 'R' && stdin_data
+                       # For 'R' reading from stdin, use '-' to indicate stdin
+                       ['-']
+                     else
+                       stdin_data ? ['-'] : [cmd.to_s]
+                     end
                    end
                  else
                    # Generic program: if cmd present and is a string, supply as single arg; if nil, empty args
@@ -187,7 +199,55 @@ Returns a JSON object with keys stdout, stderr and exit_status.
     end
   end
 
+  desc <<-EOF
+Run a file or code using R.
+
+If `file` is provided it will be executed. Otherwise `code` will be written to a temporary
+file under the task `root` and executed.
+
+Returns a JSON object with keys stdout, stderr and exit_status.
+  EOF
+  input :code, :text, 'R code to run (ignored if file provided)'
+  input :file, :path, 'File to run'
+  extension :json
+  task :r => :text do |code, file|
+    # Prefer provided file, otherwise write code to a temp file in root
+    if file && !file.to_s.empty?
+      root_holds_file file
+      target = file
+    elsif code && !code.to_s.empty?
+      tmp = file('script.R')
+      tmp.write code
+      target = tmp
+    else
+      raise ParameterException, 'Provide either a file or code to run'
+    end
+
+    # Prefer Rscript if available, otherwise fall back to R
+    cmd_name = nil
+    ['Rscript', 'R'].each do |p|
+      begin
+        io_test = CMD.cmd(p.to_sym, '--version', save_stderr: true, pipe: true, no_fail: true)
+        io_test.join
+        if io_test.exit_status == 0 || io_test.read.to_s.length > 0
+          cmd_name = p
+          break
+        end
+      rescue
+        next
+      end
+    end
+    cmd_name ||= 'Rscript'
+
+    begin
+      cmd_json cmd_name, target
+    rescue => e
+      raise ScoutException, e.message
+    end
+  end
+
   export_exec :bash
   export_exec :python
   export_exec :ruby
+  export_exec :r
 end
