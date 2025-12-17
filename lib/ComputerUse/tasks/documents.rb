@@ -2,9 +2,23 @@ module ComputerUse
   input :pdf, :path, "Pdf file", nil, required: true
   extension :md
   task pdf2md_full: :text do |pdf|
-    CMD.cmd(:docling, "'#{pdf}' --output '#{self.files_dir}'")
-    raise ParameterException, "Nothing produced" if files.empty?
-    Open.mv file(files.first), self.tmp_path
+    raise ParameterException, "Pdf not found: #{pdf}" unless Open.exists?(pdf)
+
+    # Run docling to convert pdf -> markdown into the step files dir
+    res = cmd_json :docling, "'#{pdf}' --output '#{self.files_dir}'"
+
+    if res.is_a?(Hash) && res[:exit_status].to_i != 0
+      raise ScoutException, "docling failed (exit=#{res[:exit_status]}): #{res[:stderr].to_s.strip}"
+    end
+
+    md_files = Dir.glob(File.join(self.files_dir, '**', '*')).select { |f| File.file?(f) }
+    raise ScoutException, "Nothing produced by docling" if md_files.empty?
+
+    begin
+      Open.mv md_files.first, self.tmp_path
+    rescue => e
+      raise ScoutException, "Failed moving output file: #{e.message}"
+    end
     nil
   end
 
@@ -28,7 +42,7 @@ module ComputerUse
         raise ScoutException, e.message
       end
     end
-    CMD.cmd(:html2markdown, in: html)
+    cmd_json :html2markdown, nil, in: html
   end
 
   input :text, :text, 'Text in Markdown'
