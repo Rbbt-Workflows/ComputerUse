@@ -9,12 +9,6 @@ module ComputerUse
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
-      # Also bind any additional writable dirs requested (e.g. self.files_dir)
-      Array(writable_dirs).each do |d|
-        next unless d
-        bwrap_args += ['--bind', d.to_s, d.to_s]
-      end
-
       # Readonly binds for common system paths so interpreters and libs are available
       %w(/bin /usr /lib /lib64 /etc ~).each do |p|
         if File.exist?(File.expand_path(p))
@@ -30,6 +24,12 @@ module ComputerUse
         end
       rescue => _e
         # ignore if root not available
+      end
+
+      # Also bind any additional writable dirs requested (e.g. self.files_dir)
+      Array(writable_dirs).each do |d|
+        next unless d
+        bwrap_args += ['--bind', d.to_s, d.to_s]
       end
 
 
@@ -105,6 +105,8 @@ module ComputerUse
       writable << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
     rescue => _e
     end
+
+    writable += ['~/.scout/tmp', '~/.scout/var']
 
     # Run inside sandbox (bwrap) when available, fallback to unsandboxed with a warning
     sandbox_run(tool, cmd, options, writable)
