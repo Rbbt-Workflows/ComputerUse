@@ -17,5 +17,6 @@ require_relative 'lib/ComputerUse/tasks/filesystem'
 require_relative 'lib/ComputerUse/tasks/exec'
 require_relative 'lib/ComputerUse/tasks/patch'
 require_relative 'lib/ComputerUse/tasks/documents'
+require_relative 'lib/ComputerUse/tasks/playwright'
 #require_relative 'lib/ComputerUse/tasks/web'
 

@@ -52,7 +52,8 @@ module ComputerUse
       else
         warn 'bwrap not found — running unsandboxed'
       end
-      io = CMD.cmd(tool, cmd, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
+      cmd_str = cmd.nil? ? nil : Shellwords.join(cmd)
+      io = CMD.cmd(tool, cmd_str, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
       {stdout: io.read, stderr: io.std_err, exit_status: io.exit_status}
     end
   end
