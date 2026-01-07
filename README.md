@@ -289,4 +289,19 @@ Outputs
 Requirements
 - Set BRAVE_API_KEY environment variable to a valid Brave Search API key.
 
-End of README.md
+## playwright
+
+
+Run Playwright test code or file against a URL.
+
+This task accepts either inline Playwright test code (JavaScript/TypeScript) or a
+path to an existing test file. It will run the test using the local Playwright
+CLI (via `npx playwright test`) inside the workflow sandbox (sandbox_run).
+
+Reports and artifacts are written to a predictable location under the current
+working directory so agents running in the repository can read them:
+  .playwright/scripts   -> generated / agent-written test scripts
+  .playwright/runs      -> per-run results (json report, html-report, traces, videos)
+
+The task returns a JSON-like object with stdout, stderr, exit_status and paths to
+artifacts (report json, html report index, results directory).
