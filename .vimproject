@@ -7,6 +7,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
 
   intro
 
+  scout_exception
+
   test_patch
 
 
