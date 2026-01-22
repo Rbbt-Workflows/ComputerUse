@@ -9,6 +9,12 @@ module ComputerUse
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
+      # Also bind any additional writable dirs requested (e.g. self.files_dir)
+      Array(writable_dirs).each do |d|
+        next unless d
+        bwrap_args += ['--bind', d.to_s, d.to_s]
+      end
+
       # Readonly binds for common system paths so interpreters and libs are available
       %w(/bin /usr /lib /lib64 /etc ~).each do |p|
         if File.exist?(File.expand_path(p))
@@ -25,13 +31,6 @@ module ComputerUse
       rescue => _e
         # ignore if root not available
       end
-
-      # Also bind any additional writable dirs requested (e.g. self.files_dir)
-      Array(writable_dirs).each do |d|
-        next unless d
-        bwrap_args += ['--bind', d.to_s, d.to_s]
-      end
-
 
       # Ensure we chdir into the repo root if available
       if root_dir && !root_dir.to_s.empty?
