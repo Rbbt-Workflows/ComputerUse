@@ -137,7 +137,7 @@ stderr and exit_status.
   task :python => :text do |code, file|
     # Prefer provided file, otherwise write code to a temp file in root
     if file && !file.to_s.empty?
-      root_holds_file file
+      file = normalize file
       target = file
     elsif code && !code.to_s.empty?
       tmp = file('script.py')
