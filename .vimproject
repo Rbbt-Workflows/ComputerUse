@@ -3,6 +3,9 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  README.md
  chats=chats filter="*"{
 
+  patches
+
+
   playwright 
 
   intro
