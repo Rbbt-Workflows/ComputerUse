@@ -1,7 +1,7 @@
 module ComputerUse
   require 'open3'
 
-  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = ['~/.scout/tmp', '~/.scout/var']|
+  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = ['~/.rbbt/tmp', '~/.rbbt/var','~/.scout/tmp', '~/.scout/var', '/tmp', '~/tmp']|
     # Prefer explicit bwrap path if provided in env
     bwrap = config(:binary, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
     bwrap ||= `which bwrap 2>/dev/null`.strip
