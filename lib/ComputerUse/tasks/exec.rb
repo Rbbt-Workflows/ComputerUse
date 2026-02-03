@@ -3,9 +3,10 @@ module ComputerUse
 
   helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = ['~/.scout/tmp', '~/.scout/var']|
     # Prefer explicit bwrap path if provided in env
-    bwrap = ENV['BWRAP_PATH'] || `which bwrap 2>/dev/null`.strip
+    bwrap = config(:binary, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
+    bwrap ||= `which bwrap 2>/dev/null`.strip
 
-    if bwrap && !bwrap.empty?
+    if bwrap && !bwrap.empty? && bwrap != 'false'
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
