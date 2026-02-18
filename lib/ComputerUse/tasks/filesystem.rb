@@ -200,5 +200,46 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
     end
   end
 
-  export_exec :list_directory, :write, :read, :file_stats, :pwd, :delete
+  # Search for files within a directory whose content matches a query string.
+  # The search is performed recursively on the supplied path (which must be a
+  # subpath of ComputerUse.root).
+  desc <<-EOF
+  Search for files within a directory whose content matches a query string.
+
+  Parameters:
+  * **path** – Directory to start searching from.
+  * **query** – String to look for in file contents. Only plain‑text files
+    are considered; binary files are skipped.
+  * **max_results** – Maximum number of matches to return. If not supplied, all
+    matches will be returned.
+
+  The task returns a JSON array of relative file paths (relative to
+  ComputerUse.root). If no files match, an empty array is returned.
+  EOF
+  input :path, :path, 'Root directory to search', nil, required: true
+  input :query, :string, 'String to search for in file contents', nil, required: true
+  input :max_results, :integer, 'Maximum number of results to return', 10
+  task :search => :array do |path, query, max_results|
+    path = normalize path
+    raise ParameterException, "Directory not found: #{path}" unless Open.exists?(path)
+    raise ParameterException, "Not a directory: #{path}" unless Open.directory?(path)
+    raise ParameterException, "Empty query string" if query.nil? || query.empty?
+    results = []
+    max_results = max_results.to_i
+    max_results = Float::INFINITY if max_results <= 0
+    Path.setup(path).glob('**/*').each do |file|
+      break if results.size >= max_results
+      next if file.directory?
+      begin
+        content = file.read
+      rescue
+        next
+      end
+      next unless content.include?(query)
+      results << file.relative
+    end
+    results
+  end
+
+  export_exec :list_directory, :write, :read, :file_stats, :pwd, :delete, :search
 end
