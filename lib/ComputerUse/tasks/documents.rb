@@ -167,10 +167,4 @@ module ComputerUse
 
   dep :html2md
   task_alias :html_query, self, :query, text: :html2md
-
-  export :pdf2md_full
-  export :pdf2md
-  export :html2md
-  export :pdf_query
-  export :html_query
 end

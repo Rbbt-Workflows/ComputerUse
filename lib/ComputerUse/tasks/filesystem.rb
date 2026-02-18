@@ -3,6 +3,7 @@ module ComputerUse
   singleton_class.attr_accessor :root
 
   helper :normalize do |path|
+    path = '.' if path == '' || TrueClass === path
     path = "./#{path}" unless path.start_with?('/')
     return path if File.expand_path(ComputerUse.root) == File.expand_path(path)
 
@@ -174,5 +175,30 @@ not, number of lines (if not binary), etc
     Dir.pwd
   end
 
-  export_exec :list_directory, :write, :read, :file_stats, :pwd
+  # Delete task
+  desc <<-EOF
+Delete a file or directory. The path must be relative to the
+`ComputerUse.root` directory, and deletion is performed with the same
+path sanity checks as the read/write tasks.
+
+If the target is a directory it is removed recursively.
+
+Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
+  EOF
+  input :file, :path, 'File or directory to delete', nil, required: true
+  task :delete => :string do |file|
+    file = normalize file
+    raise ParameterException, "File not found: #{file}" unless Open.exists?(file)
+    raise ParameterException, "Root path cannot be deleted" if File.expand_path(file) == File.expand_path(ComputerUse.root)
+
+    if Open.directory?(file)
+      FileUtils.remove_dir(file, true)
+      "deleted directory #{file}"
+    else
+      File.delete(file)
+      "deleted file #{file}"
+    end
+  end
+
+  export_exec :list_directory, :write, :read, :file_stats, :pwd, :delete
 end

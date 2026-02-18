@@ -148,6 +148,4 @@ module ComputerUse
       html_index: html_index
     }
   end
-
-  export_exec :playwright
 end

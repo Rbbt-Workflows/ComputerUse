@@ -1,7 +1,8 @@
 module ComputerUse
   require 'open3'
 
-  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = ['~/.rbbt/tmp', '~/.rbbt/var','~/.scout/tmp', '~/.scout/var', '/tmp', '~/tmp']|
+  DEFAULT_WRITABLE_DIRS = ['~/.rbbt/tmp', '~/.rbbt/var','~/.scout/tmp', '~/.scout/var', '/tmp', '~/tmp']
+  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = DEFAULT_WRITABLE_DIRS|
     # Prefer explicit bwrap path if provided in env
     bwrap = config(:binary, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
     bwrap ||= `which bwrap 2>/dev/null`.strip
@@ -10,17 +11,17 @@ module ComputerUse
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
-      # Also bind any additional writable dirs requested (e.g. self.files_dir)
-      Array(writable_dirs).each do |d|
-        next unless d
-        bwrap_args += ['--bind', d.to_s, d.to_s]
-      end
-
       # Readonly binds for common system paths so interpreters and libs are available
       %w(/bin /usr /lib /lib64 /etc ~).each do |p|
         if File.exist?(File.expand_path(p))
           bwrap_args += ['--ro-bind', p, p]
         end
+      end
+
+      # Also bind any additional writable dirs requested (e.g. self.files_dir)
+      Array(writable_dirs).each do |d|
+        next unless d
+        bwrap_args += ['--bind', d.to_s, d.to_s]
       end
 
       # Bind the ComputerUse.root writable so the sandbox can access repo files
@@ -190,7 +191,7 @@ Returns a JSON object with keys stdout, stderr and exit_status.
   task :ruby => :text do |code, file|
     # Prefer provided file, otherwise write code to a temp file in root
     if file && !file.to_s.empty?
-      root_holds_file file
+      file = normalize file
       target = file
     elsif code && !code.to_s.empty?
       tmp = file('script.rb')

@@ -176,7 +176,7 @@ Outputs
 List files and directories
 
 Inputs
-- directory (required): path under ComputerUse.root
+- directory (required): path under ComputerUse.root. Regular expression not allowed.
 - recursive: boolean (default: true)
 - stats: boolean (default: false)
 
