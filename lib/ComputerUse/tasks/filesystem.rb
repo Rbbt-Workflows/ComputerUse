@@ -236,7 +236,7 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
         next
       end
       next unless content.include?(query)
-      results << file.relative
+      results << file.relative_to(path)
     end
     results
   end
