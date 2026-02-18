@@ -104,11 +104,12 @@ modification time.
 
 Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {size: 100, mtime='2025-10-2 15:00:00'}}, 'bar/bar' => {size: 200, mtime='2025-10-3 15:30:10'}} }
   EOF
-  input :directory, :path, 'Directory to list', nil, required: true
+  input :directory, :path, 'Directory to list. Regular expressions not allowed.', nil, required: true
   input :recursive, :boolean, 'List recursively', true
   input :stats, :boolean, 'Return some stats for the files', false
   extension :json
   task :list_directory => :text do |directory,recursive,stats|
+    raise ParameterException, "Directory is a regular expression" if Regexp === directory
     directory = normalize directory
     raise ParameterException, "Directory not found: #{directory}" unless Open.exists?(directory)
     raise ParameterException, "Not a directory: #{directory}" unless Open.directory?(directory)
