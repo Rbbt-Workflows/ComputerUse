@@ -1,4 +1,4 @@
-Agent-friendly utilities for document conversion, filesystem/process helpers, patch application, Playwright testing, and simple web search.
+Agent-friendly utilities for document conversion, filesystem helpers, patch, Playwright testing, etc. 
 
 This workflow exposes tasks that are useful for AI agents operating over a codebase or dataset: converting PDFs/HTML to Markdown, listing/reading/writing files, running bash/Python/Ruby/R, applying patches (including ChatGPT-style patches) safely, and running Playwright tests. All tasks integrate with the Scout/Rbbt workflow model (typed inputs/outputs, caching, provenance, and CLI integration). You can call them programmatically from other workflows or via the workflow runner.
 
@@ -14,6 +14,19 @@ Notes on outputs
 - Document conversion tasks return Markdown text or produce Markdown files under the task temporary area.
 - The patch task returns a structured JSON result (stdout, stderr, exit_status, generated_patch, used_strip, tried_strips, applied flags).
 - Exec tasks (bash/python/ruby/r) return stdout, stderr and exit status as JSON.
+
+A note on etiquette for AI agents: If you are going to be generating files with
+data and scripts to perform tasks or test developments, please consider writing
+them on a directory like './tmp', './results', or './sandbox'. Also keep in
+mind that you will most likely only have read, write, and list access to files
+and directories inside the current working directory. Likewise, you may find
+the executions of bash, python, ruby, or R scripts sandbox that will provide
+read access across the system, but write access only under the current
+directory and some other directories like '/tmp', '~/.rbbt/tmp', '~/.rbbt/var',
+'~/.scout/tmp', and '~/.scout/var'. Take this in considerations if programs
+fail to create temporary files on other locations and consider if these
+software elements can be pointed to a different location for temporary and
+cache files, perhaps using environmental variables.
 
 # Tasks
 
@@ -198,6 +211,16 @@ Return current working directory
 Outputs
 - String with the current working directory path
 
+## playwright
+Run Playwright test code or file against a URL
+
+Accepts inline Playwright test code (JS/TS) or a path to an existing test file and runs it using npx playwright test inside the workflow sandbox. Reports and artifacts are written to:
+- .playwright/scripts (generated test files)
+- .playwright/runs (json report, html report, traces, videos)
+
+Outputs
+- JSON with stdout, stderr, exit_status and artifact paths
+
 ## patch
 Apply a patch to repository files with auto-detected strip, canonical ChatGPT conversion, and optional direct-apply fallback
 
@@ -208,11 +231,64 @@ This task accepts textual patch content and applies it using the system patch ut
 - Returns structured diagnostics including the generated patch text and all tried -p attempts
 - Optional apply_direct fallback that writes full-content updates/additions directly if patch cannot be applied (with backups)
 
+Important usage guidance
+- Use patch ONLY for updating existing files. Do NOT use patch to add or delete files.
+  - To add a file, use the write task.
+  - To delete a file, use the delete task.
+- Always dry-run first to confirm applicability and inspect diagnostics.
+- Input formats supported:
+  - ChatGPT-style blocks (recommended for agents):
+    *** Begin Patch
+    *** Update File: path/relative/to/root.ext
+    <either a canonical unified diff hunk, or the full new file content>
+    *** End Patch
+  - Canonical unified diff (--- a/... +++ b/...) with @@ hunks
+- Paths must be repo-root relative (no leading ./ or ../). Absolute paths are rejected or normalized.
+- Ensure the patch text ends with a trailing newline.
+
+CLI quick start (using scout)
+- Dry run an update patch via stdin (note: only for updates, not adds/deletes):
+  echo "*** Begin Patch
+  *** Update File: tmp/patch_demo.txt
+  -old
+  +new
+  *** End Patch" \
+  | scout workflow task --exec --nocolor ComputerUse patch --patch - --dry_run
+
+- Apply after a successful dry-run:
+  echo "*** Begin Patch
+  *** Update File: tmp/patch_demo.txt
+  -old
+  +new
+  *** End Patch" \
+  | scout workflow task --exec --nocolor ComputerUse patch --patch -
+
+Diagnostics returned
+- stdout, stderr, exit_status: raw outputs from the patch utility
+- generated_patch: canonical diff the tool produced from your input
+- used_strip: the -pN selected by auto-detection, or null if none worked
+- tried_strips: array of {strip, stdout, stderr, exit_status} trials
+- applied: whether the patch was applied (false on dry_run)
+- applied_directly: whether direct-write fallback was used (see caution below)
+- suggestion: human-readable guidance
+
+Common pitfalls and fixes
+- Patch content contains code fences (``` ... ```): strip fences before submission.
+- Missing diff headers: use ChatGPT-style Update File block or a canonical unified diff.
+- Paths have leading ./ or are absolute: provide clean, root-relative paths.
+- No trailing newline: add one to the patch text.
+- Wrong strip level: auto-detect tries 1,0,2,3,4; if it fails, specify strip explicitly.
+- Trying to add/delete via patch: use write/delete tasks instead.
+
+Caution on apply_direct
+- apply_direct writes full-file "plain content" updates directly when the diff cannot be applied and the input looks like a full replacement. It makes timestamped backups before overwriting.
+- Prefer using patch (diff) for updates; reserve apply_direct for last-resort plain-content updates. Do not rely on apply_direct for creating or removing files—use write/delete tasks instead.
+
 Inputs
 - patch (required): Patch content (unified diff or ChatGPT-style)
 - strip: Integer -pN. If omitted, auto-detects via --dry-run
 - dry_run: Boolean. If true, checks only; does not modify files
-- apply_direct: Boolean. If true, when patch application fails and the patch appears to be full file content, write files directly (backups made)
+- apply_direct: Boolean. If true, when patch diffing fails and the block looks like a full-file replacement, write the file directly (with backups)
 
 Outputs
 - JSON with:
@@ -224,45 +300,9 @@ Outputs
   - applied_directly (boolean)
   - suggestion (string)
 
-Examples
-- Dry-run a ChatGPT-style patch and inspect the generated unified diff
-```ruby
-patch_text = <<~PATCH
-*** Begin Patch
-*** Add File: lib/example.rb
-puts 'hi'
-*** End Patch
-PATCH
-res = ComputerUse.job(:patch, patch: patch_text, dry_run: true).run
-info = JSON.parse(res.stdout)
-puts info["generated_patch"]
-# => --- /dev/null
-#    +++ b/lib/example.rb
-#    @@ -0,0 +1,1 @@
-#    +puts 'hi'
-```
-
-- Apply after a successful dry-run (auto-detects -p)
-```ruby
-ComputerUse.job(:patch, patch: patch_text, dry_run: false).run
-```
-
-- Force apply_direct fallback for full-content updates
-```ruby
-update_text = <<~PATCH
-*** Begin Patch
-*** Update File: lib/example.rb
-puts 'updated'
-*** End Patch
-PATCH
-# Force a bad strip to trigger fallback; set apply_direct: true
-res = ComputerUse.job(:patch, patch: update_text, strip: 99, apply_direct: true, dry_run: false).run
-info = JSON.parse(res.stdout)
-puts info["applied_directly"] # => true (when full-content update)
-```
-
 Notes
-- All paths are validated and must remain under ComputerUse.root (".." is disallowed). Absolute paths are normalized against the root when possible.
+- To add and remove entire files please use write and delete tasks, not patch.
+- All paths are validated and must remain under the root (current directory of the process) (".." is disallowed). Absolute paths are normalized against the root when possible.
 - When apply_direct is used, existing files are backed up to .bak.<timestamp> and writes are atomic (tmp file then rename).
 
 ## brave
@@ -275,13 +315,3 @@ Inputs
 
 Outputs
 - Array of {url, text}
-
-## playwright
-Run Playwright test code or file against a URL
-
-Accepts inline Playwright test code (JS/TS) or a path to an existing test file and runs it using npx playwright test inside the workflow sandbox. Reports and artifacts are written to:
-- .playwright/scripts (generated test files)
-- .playwright/runs (json report, html report, traces, videos)
-
-Outputs
-- JSON with stdout, stderr, exit_status and artifact paths
