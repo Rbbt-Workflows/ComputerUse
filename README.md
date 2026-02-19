@@ -235,7 +235,7 @@ Important usage guidance
 - Use patch ONLY for updating existing files. Do NOT use patch to add or delete files.
   - To add a file, use the write task.
   - To delete a file, use the delete task.
-- Always dry-run first to confirm applicability and inspect diagnostics.
+- Use dry-run after a few errors to confirm applicability and inspect diagnostics.
 - Input formats supported:
   - ChatGPT-style blocks (recommended for agents):
     *** Begin Patch
