@@ -59,7 +59,7 @@ module ComputerUse
       end
       cmd_str = case cmd
                 when Array
-                  Shellwords.join(cmd)
+                  Shellwords.join(Annotation.purge(cmd))
                 else
                   cmd
                 end
