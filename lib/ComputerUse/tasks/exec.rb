@@ -4,10 +4,14 @@ module ComputerUse
   DEFAULT_WRITABLE_DIRS = ['~/.rbbt/tmp', '~/.rbbt/var','~/.scout/tmp', '~/.scout/var', '/tmp', '~/tmp']
   helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = DEFAULT_WRITABLE_DIRS|
     # Prefer explicit bwrap path if provided in env
-    bwrap = config(:binary, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
-    bwrap ||= `which bwrap 2>/dev/null`.strip
+    bwrap = config(:path, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
+    bwrap = `which bwrap 2>/dev/null`.strip if bwrap.nil?
 
-    if bwrap && !bwrap.empty? && bwrap != 'false'
+    write_dirs = config(:write_dirs, :bwrap, :sandbox, :sandbox_run, env: 'WRITE_DIRS')
+ 
+    writable_dirs += write_dirs.split(',').collect{|d| d.strip } if write_dirs
+
+    if bwrap && !bwrap.empty? && bwrap.to_s != 'false'
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
