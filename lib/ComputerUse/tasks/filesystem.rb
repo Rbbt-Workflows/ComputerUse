@@ -4,7 +4,7 @@ module ComputerUse
 
   helper :normalize do |path|
     path = '.' if path == '' || TrueClass === path
-    path = "./#{path}" unless path.start_with?('/')
+    path = "./#{path}" unless path.start_with?('/') || path.start_with?('./')
     return path if File.expand_path(ComputerUse.root) == File.expand_path(path)
 
     if Open.exists?(path) || Open.directory?(path)

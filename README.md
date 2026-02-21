@@ -8,25 +8,39 @@ Dependencies and environment
   - docling CLI for PDF → Markdown
   - html2markdown CLI for HTML → Markdown
   - npx playwright for Playwright tests (installed project-wide)
-- The tasks rely on Scout helpers like CMD and Open and use a sandbox (bwrap) when available for safer execution.
+- The tasks rely on Scout helpers like CMD and Open and use a sandbox (bwrap)
+  when available for safer execution.
 
 Notes on outputs
-- Document conversion tasks return Markdown text or produce Markdown files under the task temporary area.
-- The patch task returns a structured JSON result (stdout, stderr, exit_status, generated_patch, used_strip, tried_strips, applied flags).
-- Exec tasks (bash/python/ruby/r) return stdout, stderr and exit status as JSON.
+- Document conversion tasks return Markdown text or produce Markdown files
+  under the task temporary area.
+- The patch task returns a structured JSON result (stdout, stderr, exit_status,
+  generated_patch, used_strip, tried_strips, applied flags).
+- Exec tasks (bash/python/ruby/r) return stdout, stderr and exit status as
+  JSON.
+
+These tools are intended to be used to alter the files on one particular
+project while limiting access to arbitrary places in the filesystem. For that
+reason tasks like `read`, `write`, `delete`, `search` and `list_directory`
+check that the input paths are under the current process working directory
+(PWD). 
+
+Execution of arbitrary code with `bash`, `ruby`, `python`, `r`, or `patch` is
+ran using the bwrap tool to create a secure sandbox that only provides write
+access to the current process working directory, and a few other locations like
+'/tmp', '~/.rbbt/tmp', '~/.rbbt/var', '~/.scout/tmp', and '~/.scout/var', and
+read access to other locations that may contain libraries and code, such as the
+users home directory, '/usr/lib', and '/usr/local/lib'. Some tools you execute
+this way may intend to create cache or temporary files outside the allowed
+directories, consider if these tools can be pointed to do that inside the
+current directory, perhaps using environment variables. Tools can also be
+executed without a sandbox if bwrap tool is not available in the system or if
+explicitly deactivated by setting the environment variable 'BWRAP_PATH' to
+'false'.
 
 A note on etiquette for AI agents: If you are going to be generating files with
 data and scripts to perform tasks or test developments, please consider writing
-them on a directory like './tmp', './results', or './sandbox'. Also keep in
-mind that you will most likely only have read, write, and list access to files
-and directories inside the current working directory. Likewise, you may find
-the executions of bash, python, ruby, or R scripts sandbox that will provide
-read access across the system, but write access only under the current
-directory and some other directories like '/tmp', '~/.rbbt/tmp', '~/.rbbt/var',
-'~/.scout/tmp', and '~/.scout/var'. Take this in considerations if programs
-fail to create temporary files on other locations and consider if these
-software elements can be pointed to a different location for temporary and
-cache files, perhaps using environmental variables.
+them on a directory like './tmp', './results', or './sandbox'.
 
 # Tasks
 
@@ -232,6 +246,7 @@ This task accepts textual patch content and applies it using the system patch ut
 - Optional apply_direct fallback that writes full-content updates/additions directly if patch cannot be applied (with backups)
 
 Important usage guidance
+- Patches are hard to write correctly, for large changes that change most of the file consider using `write` with the new version instead of using patch
 - Use patch ONLY for updating existing files. Do NOT use patch to add or delete files.
   - To add a file, use the write task.
   - To delete a file, use the delete task.

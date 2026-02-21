@@ -11,7 +11,7 @@ module ComputerUse
   input :headless, :boolean, 'Run browser headlessly (default: true)', true
   input :trace, :boolean, 'Enable Playwright tracing for the run (default: false)', false
   input :video, :boolean, 'Enable video recording for tests (default: false)', false
-  input :timeout, :integer, 'Per-test timeout in seconds (default: 300)', 300
+  input :timeout, :integer, 'Per-test timeout in seconds (default: 10)', 10
   input :extra_args, :string, 'Extra arguments to pass to `playwright test` (optional)', nil
 
   extension :json
@@ -148,4 +148,6 @@ module ComputerUse
       html_index: html_index
     }
   end
+
+  export_exec :playwright
 end
