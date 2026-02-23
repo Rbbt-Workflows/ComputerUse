@@ -9,6 +9,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
 
   patches
 
+  patches.2
+
 
   playwright 
 
