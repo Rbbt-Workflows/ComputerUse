@@ -42,7 +42,13 @@ module ComputerUse
         raise ScoutException, e.message
       end
     end
-    cmd_json :html2markdown, nil, in: html
+    res = cmd_json :html2markdown, nil, in: html
+
+    if res.is_a?(Hash) && res[:exit_status].to_i != 0
+      raise ScoutException, "docling failed (exit=#{res[:exit_status]}): #{res[:stderr].to_s.strip}"
+    end
+
+    res[:stdout]
   end
 
   input :text, :text, 'Text in Markdown'
@@ -167,4 +173,6 @@ module ComputerUse
 
   dep :html2md
   task_alias :html_query, self, :query, text: :html2md
+
+  export :html2md, :html_query
 end
