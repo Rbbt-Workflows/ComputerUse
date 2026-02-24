@@ -1,6 +1,7 @@
 ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf" {
  workflow.rb
  README.md
+ start_chat
  chats=chats filter="*"{
 
   delete
@@ -10,6 +11,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
   patches
 
   patches.2
+
+  tests_patches
 
 
   playwright 

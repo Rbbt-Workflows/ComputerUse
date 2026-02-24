@@ -60,8 +60,6 @@ module ComputerUse
     results
   end
 
-  export_exec :brave
-
   # Scout task: web search using a SearXNG instance
   #
   # SearXNG is a self-hosted metasearch engine that can return JSON results.
@@ -70,21 +68,21 @@ module ComputerUse
   #   - or env var `SEARXNG_URL`
   #
   # Optional (non-standard, instance-dependent) authentication:
-  #   - env var `SEARXNG_API_KEY` (sent as `X-API-Key`)
+  #   - env var `SEARXNG_API_KEY` or input `searxng_api_key` (sent as `X-API-Key`)
   #
   # Returns: [{url: "...", text: "..."}, ...]
   desc 'Web search using a SearXNG instance (self-hosted). Uses SEARXNG_URL or searxng_url.'
   input :query, :string, 'Search query string', nil, required: true
-  input :searxng_url, :string, 'SearXNG base URL (e.g. https://search.example.com)', nil, required: false
   input :count, :integer, 'Number of results to return (best-effort)', 10, required: false
   input :language, :string, 'Language code (e.g. en, en-US). Optional', nil, required: false
   input :categories, :string, 'Comma-separated categories (e.g. general, science). Optional', nil, required: false
   input :engines, :string, 'Comma-separated engines (instance dependent). Optional', nil, required: false
   input :safesearch, :integer, 'Safe-search level (0..2). Optional', 0, required: false
   input :time_range, :string, 'Time range (day, week, month, year). Optional', nil, required: false
-  task :searxng => :json do |query, searxng_url, count, language, categories, engines, safesearch, time_range|
+  input :endpoint_path, :string, 'Endpoint path (usually /search)', '/search', required: false
+  task :searxng => :json do |query, count, language, categories, engines, safesearch, time_range, endpoint_path|
+    searxng_url = config :url, :searxng, env: 'SEARXNG_URL'
     searxng_url = searxng_url.to_s.strip
-    searxng_url = ENV['SEARXNG_URL'].to_s.strip if searxng_url.empty?
 
     if searxng_url.nil? || searxng_url.empty?
       raise ParameterException, 'SearXNG URL not set. Provide --searxng_url or set SEARXNG_URL'
@@ -98,13 +96,27 @@ module ComputerUse
     end
 
     base = searxng_url.sub(%r{/*\z}, '')
-    endpoint = base + '/search'
+    # If the provided URL already points to /search, use it as-is; otherwise append endpoint_path
+    if base =~ %r{/search\z} || base =~ %r{/search/\z}
+      endpoint = base
+      referer  = base.sub(%r{/search/?\z}, '')
+    else
+      path = endpoint_path.to_s.strip
+      path = '/search' if path.empty?
+      path = '/' + path unless path.start_with?('/')
+      endpoint = base + path
+      referer  = base
+    end
 
-    api_key = ENV['SEARXNG_API_KEY']
+    api_key = config :key, :searxng, env: 'SEARXNG_API_KEY'
 
     headers = {
       'Accept' => 'application/json',
-      'User-Agent' => 'Scout-ComputerUse/1.0'
+      'User-Agent' => 'Scout-ComputerUse/1.0',
+      # Some deployments expect these for JSON/AJAX access
+      'Referer' => referer,
+      'X-Requested-With' => 'XMLHttpRequest',
+      'Accept-Language' => (language && !language.to_s.empty?) ? language : 'en-US,en;q=0.8'
     }
     headers['X-API-Key'] = api_key if api_key && !api_key.to_s.empty?
 
