@@ -102,7 +102,7 @@ module ComputerUse
         out << "--- /dev/null\n"
         out << "+++ #{b_name}\n"
         out << "@@ -0,0 +1,#{body.length} @@\n"
-        body.each { |l| out << "+#{l}\n" }
+        body.each { |l| out << "+#{l.sub(/^\+/,'')}\n" }
 
         # ------------------------
         # DELETE FILE
@@ -117,7 +117,7 @@ module ComputerUse
           out << "@@ -0,0 +0,0 @@\n"
         else
           out << "@@ -1,#{old_lines.length} +0,0 @@\n"
-          old_lines.each { |l| out << "-#{l}\n" }
+          old_lines.each { |l| out << "-#{l.sub(/^\-/,'')}\n" }
         end
 
         # ------------------------
