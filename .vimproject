@@ -1,47 +1,31 @@
 ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf" {
  workflow.rb
+ start_chat
  README.md
  start_chat
  chats=chats filter="*"{
-
   delete
-
-  search
-
-  patches
-
-  patches.2
-
-  tests_patches
-
-
-  playwright 
-
-  intro
-
-  scout_exception
-
-  test_patch
-
-
-  sandbox
-
-  read_file
-
-
+  doc
   document.rb
+  file_system
   file_system_tasks
+  intro
   orders_format
-  test_ls
-
-  ruby
-
-  rag
-
-  tasks_ruby
-
+  patches
+  patches.2
+  playwright
   query
-
+  rag
+  read_file
+  ruby
+  run_R
+  sandbox
+  scout_exception
+  search
+  tasks_ruby
+  test_ls
+  test_patch
+  web_search
  }
  bin=bin filter="*"{
  }
