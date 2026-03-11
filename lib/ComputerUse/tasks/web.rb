@@ -27,7 +27,7 @@ module ComputerUse
   input :time_range, :string, 'Time range (day, week, month, year). Optional', nil, required: false
   input :endpoint_path, :string, 'Endpoint path (usually /search)', '/search', required: false
   task :searxng => :json do |query, count, language, categories, engines, safesearch, time_range, endpoint_path|
-    searxng_url = config :url, :searxng, env: 'SEARXNG_URL'
+    searxng_url = config :url, :searxng, env: 'SEARXNG_URL', default: 'http://localhost:8181'
     searxng_url = searxng_url.to_s.strip
 
     if searxng_url.nil? || searxng_url.empty?
