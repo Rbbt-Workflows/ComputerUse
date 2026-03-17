@@ -260,7 +260,7 @@ Returns a JSON object with keys:
       candidate_strips = strip.nil? || strip.to_i == 0 ? [1,0,2,3,4] : [strip.to_i]
 
       candidate_strips.each do |p|
-        args = ["-p#{p}", '--dry-run', '-i', tmp_patch]
+        args = ["--batch", "-p#{p}", '--dry-run', '-i', tmp_patch]
         res = cmd_json(:patch, args)
         tried << { strip: p, stdout: res[:stdout], stderr: res[:stderr], exit_status: res[:exit_status] }
         if res[:exit_status].to_i == 0
