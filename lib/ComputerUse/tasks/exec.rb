@@ -23,7 +23,7 @@ module ComputerUse
       end
 
       # Also bind any additional writable dirs requested (e.g. self.files_dir)
-      Array(writable_dirs).each do |d|
+      writable_dirs.each do |d|
         next unless d
         bwrap_args += ['--bind', d.to_s, d.to_s]
       end
@@ -117,10 +117,8 @@ module ComputerUse
     rescue => _e
     end
 
-    writable += ['~/.scout/tmp', '~/.scout/var']
-
     # Run inside sandbox (bwrap) when available, fallback to unsandboxed with a warning
-    sandbox_run(tool, cmd, options, writable)
+    sandbox_run(tool, cmd, options)
   end
 
   desc <<-EOF
