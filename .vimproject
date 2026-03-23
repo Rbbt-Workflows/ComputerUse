@@ -4,6 +4,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
  README.md
  start_chat
  chats=chats filter="*"{
+  update_documentation
+
   delete
   doc
   document.rb
