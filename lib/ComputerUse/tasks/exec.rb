@@ -68,7 +68,7 @@ module ComputerUse
     end
   end
 
-  helper :cmd_json do |tool, cmd, options={}|
+  helper :cmd_json do |tool, cmd, options={}, writable_dirs=DEFAULT_WRITABLE_DIRS|
     # Normalize command and stdin
     stdin_data = options[:in]
 
@@ -111,14 +111,14 @@ module ComputerUse
     args_array = Array(args_array).collect(&:to_s)
 
     # Collect writable dirs to expose inside the sandbox: prefer step files_dir if available
-    writable = []
+    writable_dirs = DEFAULT_WRITABLE_DIRS.dup
     begin
-      writable << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
+      writable_dirs << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
     rescue => _e
     end
 
     # Run inside sandbox (bwrap) when available, fallback to unsandboxed with a warning
-    sandbox_run(tool, cmd, options)
+    sandbox_run(tool, cmd, options, writable_dirs)
   end
 
   desc <<-EOF
