@@ -1,23 +1,53 @@
 module ComputerUse
   @root = Dir.pwd
-  singleton_class.attr_accessor :root
+  @allowed = ['']
+  @allowed_read = ['var/jobs']
+  singleton_class.attr_accessor :root, :allowed, :allowed_read
 
-  helper :normalize do |path|
-    path = '.' if path == '' || TrueClass === path
-    path = "./#{path}" unless path.start_with?('/') || path.start_with?('./')
-    return path if File.expand_path(ComputerUse.root) == File.expand_path(path)
+  helper :inside? do |directory,path|
+    return path if File.expand_path(directory) == File.expand_path(path)
 
     if Open.exists?(path) || Open.directory?(path)
-      return path if Open.realpath(ComputerUse.root) == Open.realpath(path)
-      if Misc.path_relative_to(Open.realpath(ComputerUse.root), Open.realpath(path)).nil?
-        raise ParameterException, "File #{path} not under #{ComputerUse.root}"
+      return path if Open.realpath(directory) == Open.realpath(path)
+      if Misc.path_relative_to(Open.realpath(directory), Open.realpath(path)).nil?
+        raise ParameterException, "File #{path} not under #{directory}"
       end
     else
-      if Misc.path_relative_to(File.expand_path(ComputerUse.root), File.expand_path(path)).nil?
-        raise ParameterException, "File #{path} not under #{ComputerUse.root}"
+      if Misc.path_relative_to(File.expand_path(directory), File.expand_path(path)).nil?
+        raise ParameterException, "File #{path} not under #{directory}"
       end
     end
     return path
+  end
+
+  helper :normalize do |path, type=:read|
+    path = '.' if path == '' || TrueClass === path
+    path = "./#{path}" unless path.start_with?('/') || path.start_with?('./')
+
+    begin
+      inside?(ComputerUse.root, path)
+    rescue => e
+      ComputerUse.allowed.each do |dir|
+        dir = Path.setup dir unless Path === dir
+        begin
+          inside?(dir, path)
+          return dir
+        rescue
+          next
+        end
+      end
+
+      ComputerUse.allowed_read.each do |dir|
+        dir = Path.setup dir unless Path === dir
+        begin
+          inside?(dir, path)
+          return dir
+        rescue
+          next
+        end
+      end if type == :read
+      raise e
+    end
   end
 
   desc <<-EOF
@@ -27,6 +57,7 @@ Write a file.
   input :content, :text, 'Content to write into the file', nil, required: true
   task :write => :string do |file,content|
     file = normalize file
+    raise ParameterException, "File is a directory: #{file}" if Open.directory?(file)
     Open.write file, content
     "success writing to #{file}"
   end
@@ -183,11 +214,10 @@ path sanity checks as the read/write tasks.
 
 If the target is a directory it is removed recursively.
 
-Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
   EOF
   input :file, :path, 'File or directory to delete', nil, required: true
   task :delete => :string do |file|
-    file = normalize file
+    file = normalize file, :write
     raise ParameterException, "File not found: #{file}" unless Open.exists?(file)
     raise ParameterException, "Root path cannot be deleted" if File.expand_path(file) == File.expand_path(ComputerUse.root)
 
@@ -198,6 +228,25 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
       File.delete(file)
       "deleted file #{file}"
     end
+  end
+
+  # Copy task
+  desc <<-EOF
+Copy a file or directory. The target path must be relative to the
+`ComputerUse.root` directory.
+
+If the source is a directory it is copied recursively. There is
+no need to create directories in the target, they will be created automatically
+  EOF
+  input :source, :path, 'File or directory to copy', nil, required: true
+  input :target, :path, 'Target path', nil, required: true
+  task :copy => :string do |source,target|
+    #source = normalize source, :read
+    target = normalize target, :write
+    raise ParameterException, "Source file not found: #{source}" unless Open.exists?(source)
+    raise ParameterException, "Root path cannot be deleted" if File.expand_path(file) == File.expand_path(ComputerUse.root)
+
+    Open.cp source, target
   end
 
   # Search for files within a directory whose content matches a query string.
@@ -219,7 +268,8 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
   input :path, :path, 'Root directory to search', nil, required: true
   input :query, :string, 'String to search for in file contents', nil, required: true
   input :max_results, :integer, 'Maximum number of results to return', 10
-  task :search => :array do |path, query, max_results|
+  input :max_files, :integer, 'Maximum number of results to examine', 200
+  task :search => :array do |path, query, max_results, max_files|
     path = normalize path
     raise ParameterException, "Directory not found: #{path}" unless Open.exists?(path)
     raise ParameterException, "Not a directory: #{path}" unless Open.directory?(path)
@@ -227,9 +277,14 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
     results = []
     max_results = max_results.to_i
     max_results = Float::INFINITY if max_results <= 0
-    Path.setup(path).glob('**/*').each do |file|
+    files = Path.setup(path).glob('**/*')
+
+    raise ParameterException, "Too many files #{files.length} (maximum #{max_files})" if files.length > max_files
+
+    TSV.traverse files, bar: self.progress_bar("Searching files") do |file|
       break if results.size >= max_results
       next if file.directory?
+      next if Open.compressed?(file)
       begin
         content = file.read
       rescue
@@ -241,5 +296,5 @@ Example: `ComputerUse.delete '/tmp/foo.txt'` => "deleted file /tmp/foo.txt"
     results
   end
 
-  export_exec :list_directory, :write, :read, :file_stats, :pwd, :delete, :search
+  export_exec :list_directory, :write, :read, :file_stats, :pwd, :copy, :delete, :search
 end

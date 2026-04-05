@@ -180,6 +180,9 @@ Write a file
 
 Write content to a file under the workflow root. Paths are validated so targets must be under ComputerUse.root.
 
+There is no need to check for the presence of directories, if the directory
+structure that will hold the file does not exist it will be created.
+
 Inputs
 - file (required): path under ComputerUse.root
 - content (required): text to write
