@@ -53,7 +53,7 @@ module ComputerUse
   desc <<-EOF
 Write a file.
   EOF
-  input :file, :path, 'File to write', nil, required: true
+  input :path, :path, 'File to write', nil, required: true
   input :content, :text, 'Content to write into the file', nil, required: true
   task :write => :string do |file,content|
     file = normalize file
@@ -66,7 +66,7 @@ Write a file.
 Read a file. Don't specify a limit to read it complete. If you specify a limit specify a file_end which can be head or tail.
 You may also specify start (line offset). For head start is 0-based from the beginning; for tail start is 0-based from the end (0 == last line).
   EOF
-  input :file, :path, 'Path to the file to read', nil, required: true
+  input :path, :path, 'Path to the file to read', nil, required: true
   input :limit, :integer, 'Number of lines to return from chosen end of the file'
   input :file_end, :select, 'Side of file to read', :head, select_options: %w(head tail)
   input :start, :integer, 'Line offset: for head -> 0-based from start; for tail -> 0-based from end (0 == last line)', 0

@@ -184,7 +184,7 @@ There is no need to check for the presence of directories, if the directory
 structure that will hold the file does not exist it will be created.
 
 Inputs
-- file (required): path under ComputerUse.root
+- path (required): path under ComputerUse.root
 - content (required): text to write
 
 Outputs
@@ -194,7 +194,7 @@ Outputs
 Read a file (head/tail or full)
 
 Inputs
-- file (required): Path to the file
+- path (required): Path to the file
 - limit: Number of lines to return
 - file_end: head | tail (default: head)
 - start: Line offset (default: 0)
