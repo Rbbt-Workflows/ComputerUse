@@ -130,6 +130,7 @@ and STDERR outputs as strings, and exit_status, the exit status of the process
   input :cmd, :string, 'Bash command to run', nil, required: true
   extension :json
   task 'bash' => :text do |cmd|
+    Log.medium "Bash\n" + cmd
     cmd_json :bash, nil, in: cmd
   end
 
