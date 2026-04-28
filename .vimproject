@@ -43,14 +43,6 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
    }
   }
  }
- sandbox=sandbox{
-  Baking=Baking{
-   instructions
-   Workflow.md
-   agents.rb
-   
-  }
- }
  test=test {
   test_helper.rb
  }
