@@ -1,4 +1,18 @@
 module ComputerUse
+  input :docx, :path, "Workd docx file", nil, required: true
+  extension :md
+  task docx2md: :text do |docx|
+    raise ParameterException, "Docx workf file not found: #{docx}" unless Open.exists?(docx)
+
+    # Run docling to convert pdf -> markdown into the step files dir
+    res = cmd_json :pandoc, "'#{docx}' -o '#{self.tmp_path}'"
+
+    if res.is_a?(Hash) && res[:exit_status].to_i != 0
+      raise ScoutException, "pandoc failed (exit=#{res[:exit_status]}): #{res[:stderr].to_s.strip}"
+    end
+    nil
+  end
+
   input :pdf, :path, "Pdf file", nil, required: true
   extension :md
   task pdf2md_full: :text do |pdf|
@@ -175,4 +189,6 @@ module ComputerUse
   task_alias :html_query, self, :query, text: :html2md
 
   export :html2md, :html_query
+
+  export :docx2md
 end
