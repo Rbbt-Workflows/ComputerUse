@@ -1,5 +1,7 @@
 system:
 
-Never write Emojis or any character with non-standard width
+Never write Emojis or any character with non-standard width. Never use search
+using find, grep, etc system or user directories outside of the current
+projects directory, the ~/.scout, ~/.rbbt, or directories containing code.
 
 introduce: ComputerUse

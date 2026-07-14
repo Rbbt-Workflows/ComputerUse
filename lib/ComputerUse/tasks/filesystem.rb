@@ -30,8 +30,7 @@ module ComputerUse
       ComputerUse.allowed.each do |dir|
         dir = Path.setup dir unless Path === dir
         begin
-          inside?(dir, path)
-          return dir
+          return inside?(dir, path)
         rescue
           next
         end
@@ -40,8 +39,7 @@ module ComputerUse
       ComputerUse.allowed_read.each do |dir|
         dir = Path.setup dir unless Path === dir
         begin
-          inside?(dir, path)
-          return dir
+          return inside?(dir, path)
         rescue
           next
         end
@@ -139,8 +137,7 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
   input :directory, :path, 'Directory to list. Regular expressions not allowed.', nil, required: true
   input :recursive, :boolean, 'List recursively', true
   input :stats, :boolean, 'Return some stats for the files', false
-  extension :json
-  task :list_directory => :text do |directory,recursive,stats|
+  task :list_directory => :json do |directory,recursive,stats|
     raise ParameterException, "Directory is a regular expression" if Regexp === directory
     directory = normalize directory
     raise ParameterException, "Directory not found: #{directory}" unless Open.exists?(directory)
@@ -172,7 +169,7 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
       end
     end
 
-    info.to_json
+    info
   end
 
   desc <<-EOF
@@ -183,8 +180,7 @@ not, number of lines (if not binary), etc
 
   EOF
   input :file, :path, 'File with stats to report', nil, required: true
-  extension :json
-  task :file_stats => :text do |file,root|
+  task :file_stats => :json do |file,root|
     normalize file
     raise ParameterException, "File not found: #{file}" unless Open.exists?(file)
     file = Path.setup(file)
@@ -196,7 +192,7 @@ not, number of lines (if not binary), etc
       stats[:lines] = Open.read(file).split("\n").length
       stats[:mtime] = Open.mtime(file)
     end
-    stats.to_json
+    stats
   end
 
   export_exec :list_directory, :write, :read, :file_stats
