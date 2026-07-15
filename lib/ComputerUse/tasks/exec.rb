@@ -8,10 +8,14 @@ module ComputerUse
     bwrap = `which bwrap 2>/dev/null`.strip if bwrap.nil?
 
     write_dirs = config(:write_dirs, :bwrap, :sandbox, :sandbox_run, env: 'WRITE_DIRS')
- 
+
     writable_dirs += write_dirs.split(',').collect{|d| d.strip } if write_dirs
 
-    if bwrap && !bwrap.empty? && bwrap.to_s != 'false'
+    writable_dirs += ComputerUse.allowed_dirs
+
+    writable_dirs.uniq!
+
+    if bwrap && !bwrap.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 

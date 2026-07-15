@@ -1,8 +1,20 @@
 module ComputerUse
   @root = Dir.pwd
-  @allowed = ['']
+  @allowed = []
   @allowed_read = ['var/jobs']
   singleton_class.attr_accessor :root, :allowed, :allowed_read
+
+  def self.allowed_dirs
+    config_allowed = Scout::Config.get(:allowed_dirs, :computer_use, :ComputerUse, env: 'ALLOWED_DIRS')
+    config_allowed = config_allowed.nil? ? [] : config_allowed.split(/(?:,|:)\s*/)
+    @allowed + config_allowed
+  end
+
+  def self.allowed_read_dirs
+    config_allowed = Scout::Config.get(:allowed_read_dirs, :computer_use, :ComputerUse, env: 'ALLOWED_READ_DIRS')
+    config_allowed = config_allowed.nil? ? [] : config_allowed.split(/(?:,|:)\s*/)
+    @allowed_read + config_allowed
+  end
 
   helper :inside? do |directory,path|
     return path if File.expand_path(directory) == File.expand_path(path)
@@ -27,7 +39,7 @@ module ComputerUse
     begin
       inside?(ComputerUse.root, path)
     rescue => e
-      ComputerUse.allowed.each do |dir|
+      ComputerUse.allowed_dirs.each do |dir|
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
@@ -36,7 +48,7 @@ module ComputerUse
         end
       end
 
-      ComputerUse.allowed_read.each do |dir|
+      ComputerUse.allowed_read_dirs.each do |dir|
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
