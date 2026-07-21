@@ -2,15 +2,59 @@ require 'fileutils'
 require 'scout'
 module ComputerUse
 
+  # Normalize hunk counts even for an otherwise valid unified diff. Agents
+  # routinely produce correct edit lines with stale @@ counts; GNU patch calls
+  # those diffs malformed before it has a chance to apply them.
+  def self.normalize_unified_diff(patch_text)
+    lines = patch_text.to_s.lines.map(&:chomp)
+    output = []
+    index = 0
+
+    while index < lines.length
+      line = lines[index]
+      unless line =~ /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
+        output << line
+        index += 1
+        next
+      end
+
+      old_start = $1
+      new_start = $3
+      suffix = $5
+      index += 1
+      hunk = []
+      while index < lines.length && !lines[index].start_with?('@@')
+        # A hunk line can itself begin with `--- ` or `+++ ` when its content
+        # starts with dashes/pluses. Only treat the pair as a file header when
+        # both header lines occur together.
+        file_header = lines[index].start_with?('--- ') &&
+          index + 1 < lines.length && lines[index + 1].start_with?('+++ ')
+        break if file_header
+
+        hunk << lines[index]
+        index += 1
+      end
+
+      old_count = hunk.count { |entry| entry.start_with?(' ', '-') }
+      new_count = hunk.count { |entry| entry.start_with?(' ', '+') }
+      output << "@@ -#{old_start},#{old_count} +#{new_start},#{new_count} @@#{suffix}"
+      output.concat(hunk)
+    end
+
+    output.join("\n") + "\n"
+  end
+
   def self.convert_chatgpt_patch(patch_text)
     return '' if patch_text.nil?
 
-    # Pass through real unified diffs untouched
+    # Keep real unified diffs, but repair stale hunk counts first.
     if patch_text =~ /^--- \S/ && patch_text =~ /^\+\+\+ \S/
-      return patch_text.end_with?("\n") ? patch_text : patch_text + "\n"
+      return normalize_unified_diff(patch_text)
     end
 
-    root = Dir.pwd
+    # Conversion must inspect the repository being patched, not ComputerUse's
+    # workflow-job directory (the task changes directory only later on).
+    root = ComputerUse.root
 
     ensure_rel = lambda do |p|
       p = p.to_s.strip
@@ -34,6 +78,7 @@ module ComputerUse
     # Find exact consecutive match of lines in file
     find_match = lambda do |file_lines, target_lines|
       return nil if target_lines.empty?
+      raise ScoutException, "Could not locate hunk context in file" if target_lines.length > file_lines.length
 
       matches = []
       (0..file_lines.length - target_lines.length).each do |i|
@@ -145,7 +190,9 @@ module ComputerUse
 
         # If no @@ present → treat entire body as one contextual hunk
         if hunks.length == 1 && !hunks.first.first&.start_with?('@@')
-          hunks = [["@@"]] + hunks
+          # Keep the first body line. The previous form created an empty hunk
+          # and interpreted the first edit line as the next hunk's header.
+          hunks = [["@@"] + hunks.first]
         end
 
         hunks.each do |hunk|
@@ -160,8 +207,8 @@ module ComputerUse
             new_count = ($4 || "1").to_i
 
             # Recompute actual counts
-            computed_old = lines.count { |l| l.start_with?(' ') || l.start_with?('-') }
-            computed_new = lines.count { |l| l.start_with?(' ') || l.start_with?('+') }
+            computed_old = lines.count { |l| !l.start_with?('+') }
+            computed_new = lines.count { |l| !l.start_with?('-') }
 
             old_count = computed_old
             new_count = computed_new
@@ -178,10 +225,13 @@ module ComputerUse
 
           else
             # Contextual @@ → must resolve position
-            minus_lines = lines.select { |l| l.start_with?('-') }.map { |l| l[1..] }
-            context_lines = lines.select { |l| l.start_with?(' ') }.map { |l| l[1..] }
-
-            anchor = minus_lines.empty? ? context_lines : minus_lines
+            # ChatGPT-style update blocks commonly use bare context lines.
+            # Resolve against the complete old-side sequence: spaces/bare
+            # lines are context, '-' is old content and '+' does not exist in
+            # the source file.
+            anchor = lines.reject { |l| l.start_with?('+') }.collect do |l|
+              l.start_with?(' ', '-') ? l[1..] : l
+            end
 
             if anchor.empty?
               raise ScoutException, "Cannot resolve hunk without context or deletions"
@@ -190,8 +240,8 @@ module ComputerUse
             index = find_match.call(file_lines, anchor)
 
             old_start = index + 1
-            old_count = lines.count { |l| l.start_with?(' ') || l.start_with?('-') }
-            new_count = lines.count { |l| l.start_with?(' ') || l.start_with?('+') }
+            old_count = lines.count { |l| !l.start_with?('+') }
+            new_count = lines.count { |l| !l.start_with?('-') }
 
             out << "@@ -#{old_start},#{old_count} +#{old_start},#{new_count} @@\n"
 
@@ -257,7 +307,7 @@ Returns a JSON object with keys:
     final = { stdout: '', stderr: '', exit_status: 1 }
 
     Dir.chdir(ComputerUse.root) do
-      candidate_strips = strip.nil? || strip.to_i == 0 ? [1,0,2,3,4] : [strip.to_i]
+      candidate_strips = strip.nil? ? [1,0,2,3,4] : [strip.to_i]
 
       candidate_strips.each do |p|
         args = ["--batch", "-p#{p}", '--dry-run', '-i', tmp_patch]
@@ -267,7 +317,7 @@ Returns a JSON object with keys:
           used_strip = p
           final = res
           break
-        elsif res[:stderr].include? "malformed"
+        elsif [res[:stdout], res[:stderr]].join("\n").include?("malformed")
           used_strip = p
           malformed = true
           break
@@ -384,7 +434,7 @@ Returns a JSON object with keys:
         }.to_json
       end
 
-      apply_res = cmd_json(:patch, ["-p#{used_strip}", '-i', tmp_patch])
+      apply_res = cmd_json(:patch, ["--batch", "-p#{used_strip}", '-i', tmp_patch])
       next {
         exit_status: apply_res[:exit_status],
         stdout: apply_res[:stdout],
