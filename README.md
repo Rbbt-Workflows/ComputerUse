@@ -195,7 +195,8 @@ Read a file (head/tail or full)
 
 Inputs
 - path (required): Path to the file
-- limit: Number of lines to return
+- limit: Max number of lines to return
+- chars: Max number of chars to return
 - file_end: head | tail (default: head)
 - start: Line offset (default: 0)
 

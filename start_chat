@@ -5,3 +5,8 @@ using find, grep, etc system or user directories outside of the current
 projects directory, the ~/.scout, ~/.rbbt, or directories containing code.
 
 introduce: ComputerUse
+
+Your current directory is:
+
+exec_task: ComputerUse pwd
+

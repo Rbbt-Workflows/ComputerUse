@@ -1,26 +1,30 @@
 module ComputerUse
   require 'open3'
 
-  DEFAULT_WRITABLE_DIRS = ['~/.rbbt/tmp', '~/.rbbt/var','~/.scout/tmp', '~/.scout/var', '/tmp', '~/tmp']
-  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = DEFAULT_WRITABLE_DIRS|
+  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = []|
     # Prefer explicit bwrap path if provided in env
     bwrap = config(:path, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
     bwrap = `which bwrap 2>/dev/null`.strip if bwrap.nil?
 
-    write_dirs = config(:write_dirs, :bwrap, :sandbox, :sandbox_run, env: 'WRITE_DIRS')
+    bwrap_dirs = ComputerUse.get_allowed_dirs :bwrap_dirs
+    bwrap_read_dirs = ComputerUse.get_allowed_dirs :bwrap_read_dirs
 
-    writable_dirs += write_dirs.split(',').collect{|d| d.strip } if write_dirs
+    writable_dirs = ComputerUse.allowed_dirs.dup
+    read_dirs = ComputerUse.allowed_read_dirs.dup
 
-    writable_dirs += ComputerUse.allowed_dirs
+    writable_dirs += bwrap_dirs if bwrap_dirs
+    read_dirs += bwrap_read_dirs if bwrap_read_dirs
 
     writable_dirs.uniq!
+    read_dirs.uniq!
+    read_dirs -= writable_dirs
 
     if bwrap && !bwrap.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
       # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
       bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
 
-      # Readonly binds for common system paths so interpreters and libs are available
-      %w(/bin /usr /lib /lib64 /etc ~).each do |p|
+      # Readonly binds 
+      read_dirs.each do |p|
         if File.exist?(File.expand_path(p))
           bwrap_args += ['--ro-bind', p, p]
         end
@@ -28,6 +32,7 @@ module ComputerUse
 
       # Also bind any additional writable dirs requested (e.g. self.files_dir)
       writable_dirs.each do |d|
+        next unless File.exist?(d)
         next unless d
         bwrap_args += ['--bind', d.to_s, d.to_s]
       end
@@ -72,7 +77,7 @@ module ComputerUse
     end
   end
 
-  helper :cmd_json do |tool, cmd, options={}, writable_dirs=DEFAULT_WRITABLE_DIRS|
+  helper :cmd_json do |tool, cmd, options={}, writable_dirs= []|
     # Normalize command and stdin
     stdin_data = options[:in]
 
@@ -115,7 +120,7 @@ module ComputerUse
     args_array = Array(args_array).collect(&:to_s)
 
     # Collect writable dirs to expose inside the sandbox: prefer step files_dir if available
-    writable_dirs = DEFAULT_WRITABLE_DIRS.dup
+    writable_dirs = ComputerUse.get_allowed_dirs(:allowed_dirs)
     begin
       writable_dirs << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
     rescue => _e

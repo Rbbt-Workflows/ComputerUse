@@ -1,19 +1,48 @@
 module ComputerUse
+
+  TMP_DIRS = Path.setup("tmp").find_all
+
+  def self.get_allowed_dirs(type)
+    type_defaults = {
+      exec_dirs: %w(/bin /usr /lib /lib64 /etc).join(":"),
+      allowed_dirs: (TMP_DIRS + %w(/tmp ~/tmp)).join(":"),
+      allowed_read_dirs: %w(var/jobs ~).join(":"),
+      dirs: %w(var/jobs ~).join(":"),
+      read_dirs: %w(var/jobs ~).join(":")
+    }
+
+    dir_str = Scout::Config.get(type, :ComputerUse, :computer_use, :sandbox, default: type_defaults[type], env: type.to_s.upcase)
+
+    return [] if dir_str.nil?
+    dir_str.split(/[,:]/).collect{|dir| Path.setup(File.expand_path(dir)).find_all}.flatten
+  end
+
+
   @root = Dir.pwd
-  @allowed = []
-  @allowed_read = ['var/jobs']
-  singleton_class.attr_accessor :root, :allowed, :allowed_read
+  singleton_class.attr_accessor :root
 
   def self.allowed_dirs
-    config_allowed = Scout::Config.get(:allowed_dirs, :computer_use, :ComputerUse, env: 'ALLOWED_DIRS')
-    config_allowed = config_allowed.nil? ? [] : config_allowed.split(/(?:,|:)\s*/)
-    @allowed + config_allowed
+    dirs = get_allowed_dirs(:allowed_dirs) 
+    dirs = get_allowed_dirs(:dirs) 
+    if Thread.current['ScoutAgent']
+      job = Thread.current['ScoutAgent'].job
+      dirs << job.files_dir if job
+    end
+    dirs
   end
 
   def self.allowed_read_dirs
-    config_allowed = Scout::Config.get(:allowed_read_dirs, :computer_use, :ComputerUse, env: 'ALLOWED_READ_DIRS')
-    config_allowed = config_allowed.nil? ? [] : config_allowed.split(/(?:,|:)\s*/)
-    @allowed_read + config_allowed
+    dirs = get_allowed_dirs(:allowed_read_dirs)
+    dirs += get_allowed_dirs(:exec_dirs)
+    dirs += get_allowed_dirs(:read_dirs)
+    if Thread.current['ScoutAgent']
+      job = Thread.current['ScoutAgent']
+      dirs << job.files_dir
+      job.rec_dependencies.each do |dep|
+        dep << dep.files_dir if dep.files_dir
+      end
+    end
+    dirs
   end
 
   helper :inside? do |directory,path|
@@ -40,6 +69,7 @@ module ComputerUse
       inside?(ComputerUse.root, path)
     rescue => e
       ComputerUse.allowed_dirs.each do |dir|
+        dir = File.expand_path(dir)
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
@@ -49,6 +79,7 @@ module ComputerUse
       end
 
       ComputerUse.allowed_read_dirs.each do |dir|
+        dir = File.expand_path(dir)
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
@@ -77,114 +108,134 @@ Read a file. Don't specify a limit to read it complete. If you specify a limit s
 You may also specify start (line offset). For head start is 0-based from the beginning; for tail start is 0-based from the end (0 == last line).
   EOF
   input :path, :path, 'Path to the file to read', nil, required: true
-  input :limit, :integer, 'Number of lines to return from chosen end of the file'
+  input :limit, :integer, 'Maximum number of lines to return from chosen end of the file'
+  input :chars, :integer, 'Maximum number of chars to return from chosen end of the file'
   input :file_end, :select, 'Side of file to read', :head, select_options: %w(head tail)
   input :start, :integer, 'Line offset: for head -> 0-based from start; for tail -> 0-based from end (0 == last line)', 0
-  task :read => :text do |file, limit, file_end, start|
+  task :read => :text do |file, limit, chars, file_end, start|
     file = normalize file
 
     raise ParameterException, "File not found #{file}" unless Open.exists?(file)
     raise ParameterException, 'File is really a directory, can not read' if Open.directory?(file)
 
     # no limit -> read full file (same behaviour as before)
-    unless limit && limit.to_i > 0
+    unless (limit && limit.to_i > 0) || (chars && chars.to_i > 0)
       next Open.read(file)
     end
 
     limit = limit.to_i
-    raise ParameterException, "Wrong limit: #{Log.fingerprint limit}" if limit <= 0
+    raise ParameterException, "Wrong limit: #{Log.fingerprint limit}" if limit < 0
+
+    chars = chars.to_i
+    raise ParameterException, "Wrong chars limit: #{Log.fingerprint chars}" if chars < 0
 
     start = (start || 0).to_i
     raise ParameterException, "Wrong start: #{Log.fingerprint start}" if start < 0
 
-    case file_end.to_s
-    when '', 'head'
-      # Read from the start (or from start offset) without loading whole file
-      lines = []
-      File.open(file, 'rb') do |f|
-        f.each_line.with_index do |ln, idx|
-          next if idx < start
-          lines << (ln.chomp)
-          break if lines.length >= limit
-        end
-      end
-      lines.join("\n")
-    when 'tail'
-      # Efficiently collect lines from the end without loading the whole file.
-      # We need limit + start lines from the end, then drop the first `start`
-      needed = limit + start
-      buffer = ''
-      File.open(file, 'rb') do |f|
-        f.seek(0, IO::SEEK_END)
-        pos = f.pos
-        # read backwards in blocks until we have enough newlines or we reached start
-        while pos > 0 && buffer.count("\n") <= needed
-          read_size = [pos, 8192].min
-          pos -= read_size
-          f.seek(pos, IO::SEEK_SET)
-          buffer = f.read(read_size) + buffer
-        end
-      end
+    if limit > 0
+      res = case file_end.to_s
+            when '', 'head'
+              # Read from the start (or from start offset) without loading whole file
+              lines = []
+              File.open(file, 'rb') do |f|
+                f.each_line.with_index do |ln, idx|
+                  next if idx < start
+                  lines << (ln.chomp)
+                  break if limit > 0 && lines.length >= limit
+                end
+              end
+              lines.join("\n")
+            when 'tail'
+              # Efficiently collect lines from the end without loading the whole file.
+              # We need limit + start lines from the end, then drop the first `start`
+              needed = limit + start
+              buffer = ''
+              File.open(file, 'rb') do |f|
+                f.seek(0, IO::SEEK_END)
+                pos = f.pos
+                # read backwards in blocks until we have enough newlines or we reached start
+                while pos > 0 && buffer.count("\n") <= needed
+                  read_size = [pos, 8192].min
+                  pos -= read_size
+                  f.seek(pos, IO::SEEK_SET)
+                  buffer = f.read(read_size) + buffer
+                end
+              end
 
-      # Split into lines. If the file ends with newline, split will give last element '' — using split("\n") gives predictable behaviour.
-      arr = buffer.split("\n")
-      # choose the last `needed` lines (or fewer if file smaller)
-      start_index = [arr.length - needed, 0].max
-      selected = arr[start_index, needed] || []
-      # drop `start` lines from the front of the selected portion, then take `limit`
-      result = (selected[start, limit] || [])
-      result.join("\n")
+              # Split into lines. If the file ends with newline, split will give last element '' — using split("\n") gives predictable behaviour.
+              arr = buffer.split("\n")
+              # choose the last `needed` lines (or fewer if file smaller)
+              start_index = [arr.length - needed, 0].max
+              selected = arr[start_index, needed] || []
+              # drop `start` lines from the front of the selected portion, then take `limit`
+              result = (selected[start, limit] || [])
+
+              iii result
+              result.join("\n")
+            else
+              raise ParameterException, "Unknown file_end must be head or tail: #{Log.fingerprint file_end}"
+            end
     else
-      raise ParameterException, "Unknown file_end must be head or tail: #{Log.fingerprint file_end}"
+      res = Open.read(file)
     end
-  end
 
-  desc <<-EOF
+      if chars && chars.to_i > 0
+        if file_end == 'tail'
+          res = res[-(chars+1)..-1]
+        else
+          res = res[0..chars-1]
+        end
+      end
+
+      res
+    end
+
+    desc <<-EOF
 List all the files and subdirectories in a directory and returns the files and
 directories separatedly, and optionaly some file stats like size, and
 modification time.
 
 Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {size: 100, mtime='2025-10-2 15:00:00'}}, 'bar/bar' => {size: 200, mtime='2025-10-3 15:30:10'}} }
-  EOF
-  input :directory, :path, 'Directory to list. Regular expressions not allowed.', nil, required: true
-  input :recursive, :boolean, 'List recursively', true
-  input :stats, :boolean, 'Return some stats for the files', false
-  task :list_directory => :json do |directory,recursive,stats|
-    raise ParameterException, "Directory is a regular expression" if Regexp === directory
-    directory = normalize directory
-    raise ParameterException, "Directory not found: #{directory}" unless Open.exists?(directory)
-    raise ParameterException, "Not a directory: #{directory}" unless Open.directory?(directory)
-    files = if recursive
-              Path.setup(directory).glob('**/*')
-            else
-              Path.setup(directory).glob('*')
-            end
+    EOF
+    input :directory, :path, 'Directory to list. Regular expressions not allowed.', nil, required: true
+    input :recursive, :boolean, 'List recursively', true
+    input :stats, :boolean, 'Return some stats for the files', false
+    task :list_directory => :json do |directory,recursive,stats|
+      raise ParameterException, "Directory is a regular expression" if Regexp === directory
+      directory = normalize directory
+      raise ParameterException, "Directory not found: #{directory}" unless Open.exists?(directory)
+      raise ParameterException, "Not a directory: #{directory}" unless Open.directory?(directory)
+      files = if recursive
+                Path.setup(directory).glob('**/*')
+              else
+                Path.setup(directory).glob('*')
+              end
 
-    info = {files: [], directories: []}
+      info = {files: [], directories: []}
 
-    files.each do |file|
-      if file.directory?
-        info[:directories] << file.find
-      else
-        info[:files] << file.find
+      files.each do |file|
+        if file.directory?
+          info[:directories] << file.find
+        else
+          info[:files] << file.find
+        end
       end
+
+      if stats
+        info[:stats] = {}
+        info[:files].each do |file|
+          info[:stats][file] = {
+            size: File.size(file),
+            mtime: Open.mtime(file)
+          }
+
+        end
+      end
+
+      info
     end
 
-    if stats
-      info[:stats] = {}
-      info[:files].each do |file|
-        info[:stats][file] = {
-          size: File.size(file),
-          mtime: Open.mtime(file)
-        }
-
-      end
-    end
-
-    info
-  end
-
-  desc <<-EOF
+    desc <<-EOF
 Return stats if a file.
 
 Stats: size, modification time, binary or
