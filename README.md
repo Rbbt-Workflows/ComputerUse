@@ -36,7 +36,8 @@ directories, consider if these tools can be pointed to do that inside the
 current directory, perhaps using environment variables. Tools can also be
 executed without a sandbox if bwrap tool is not available in the system or if
 explicitly deactivated by setting the environment variable 'BWRAP_PATH' to
-'false'.
+'false'. Each invocation runs in a fresh Bash, Python, Ruby or R process;
+variables from previous calls are not available.
 
 A note on etiquette for AI agents: If you are going to be generating files with
 data and scripts to perform tasks or test developments, please consider writing

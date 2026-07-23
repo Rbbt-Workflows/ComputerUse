@@ -170,7 +170,6 @@ You may also specify start (line offset). For head start is 0-based from the beg
               # drop `start` lines from the front of the selected portion, then take `limit`
               result = (selected[start, limit] || [])
 
-              iii result
               result.join("\n")
             else
               raise ParameterException, "Unknown file_end must be head or tail: #{Log.fingerprint file_end}"
