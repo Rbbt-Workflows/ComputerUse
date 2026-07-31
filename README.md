@@ -23,7 +23,8 @@ These tools are intended to be used to alter the files on one particular
 project while limiting access to arbitrary places in the filesystem. For that
 reason tasks like `read`, `write`, `delete`, `search` and `list_directory`
 check that the input paths are under the current process working directory
-(PWD). 
+(PWD). You will also be granted access to workflow jobs generated during your
+work.
 
 Execution of arbitrary code with `bash`, `ruby`, `python`, `r`, or `patch` is
 ran using the bwrap tool to create a secure sandbox that only provides write

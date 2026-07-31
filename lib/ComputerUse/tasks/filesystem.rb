@@ -6,15 +6,17 @@ module ComputerUse
     type_defaults = {
       exec_dirs: %w(/bin /usr /lib /lib64 /etc).join(":"),
       allowed_dirs: (TMP_DIRS + %w(/tmp ~/tmp)).join(":"),
-      allowed_read_dirs: %w(var/jobs ~).join(":"),
-      dirs: %w(var/jobs ~).join(":"),
-      read_dirs: %w(var/jobs ~).join(":")
+      dirs: %w().join(":"),
+      read_dirs: %w().join(":"),
+      thread: Thread.current['allowed_dirs'],
+      thread_read: Thread.current['allowed_read_dirs']
     }
 
     dir_str = Scout::Config.get(type, :ComputerUse, :computer_use, :sandbox, default: type_defaults[type], env: type.to_s.upcase)
 
     return [] if dir_str.nil?
-    dir_str.split(/[,:]/).collect{|dir| Path.setup(File.expand_path(dir)).find_all}.flatten
+    dirs = String === dir_str ? dir_str.split(/[,:]/) : dir_str
+    dirs.collect{|dir| Path.setup(dir).find_all}.flatten
   end
 
 
@@ -23,11 +25,8 @@ module ComputerUse
 
   def self.allowed_dirs
     dirs = get_allowed_dirs(:allowed_dirs) 
-    dirs = get_allowed_dirs(:dirs) 
-    if Thread.current['ScoutAgent']
-      job = Thread.current['ScoutAgent'].job
-      dirs << job.files_dir if job
-    end
+    dirs += get_allowed_dirs(:dirs) 
+    dirs += get_allowed_dirs(:thread) 
     dirs
   end
 
@@ -35,13 +34,7 @@ module ComputerUse
     dirs = get_allowed_dirs(:allowed_read_dirs)
     dirs += get_allowed_dirs(:exec_dirs)
     dirs += get_allowed_dirs(:read_dirs)
-    if Thread.current['ScoutAgent']
-      job = Thread.current['ScoutAgent']
-      dirs << job.files_dir
-      job.rec_dependencies.each do |dep|
-        dep << dep.files_dir if dep.files_dir
-      end
-    end
+    dirs += get_allowed_dirs(:thread_read) 
     dirs
   end
 
@@ -50,7 +43,7 @@ module ComputerUse
 
     if Open.exists?(path) || Open.directory?(path)
       return path if Open.realpath(directory) == Open.realpath(path)
-      if Misc.path_relative_to(Open.realpath(directory), Open.realpath(path)).nil?
+      if Misc.path_relative_to(File.expand_path(Open.realpath(directory)), File.expand_path(Open.realpath(path))).nil?
         raise ParameterException, "File #{path} not under #{directory}"
       end
     else
@@ -86,7 +79,8 @@ module ComputerUse
         rescue
           next
         end
-      end if type == :read
+      end if type.to_s == 'read'
+
       raise e
     end
   end
