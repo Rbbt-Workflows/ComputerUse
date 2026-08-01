@@ -108,6 +108,89 @@ module ComputerUse
     nil
   end
 
+  # Resolve an executable to its canonical absolute path.
+  #
+  # If +exe+ is already an absolute or relative path to an existing file,
+  # symlinks are resolved via File.realpath.
+  #
+  # If +exe+ is a bare name (e.g. "ruby", "python3"), it is looked up in
+  # $PATH first, then symlinks are resolved.  This is critical so that
+  # runtime_dirs() can correctly identify the installation tree for
+  # relocatable runtimes like RVM, pyenv, or Conda.
+  helper :resolve_executable do |exe|
+    return exe.to_s if exe.nil? || exe.to_s.empty?
+    resolved = safe_realpath(exe.to_s)
+    return resolved if resolved
+    # Bare name: search PATH for the real location.
+    found = ENV['PATH'].to_s.split(File::PATH_SEPARATOR).find do |dir|
+      candidate = File.join(dir, exe.to_s)
+      File.executable?(candidate) && File.file?(candidate)
+    end
+    found ? safe_realpath(File.join(found, exe.to_s)) || exe.to_s : exe.to_s
+  end
+
+  # Compute the minimal set of directories needed to run +exe+ inside a
+  # bwrap sandbox.  This goes beyond just the bin/ directory containing the
+  # executable: for relocatable runtime environments (RVM, rbenv, Conda,
+  # pyenv, Homebrew, ...) the entire installation tree must be mounted so
+  # that relative references (../lib, ../share, gem directories, etc.)
+  # resolve correctly.
+  #
+  # Returns an Array of directory paths (deduplicated).  Returns an empty
+  # Array if the executable cannot be resolved.
+  helper :runtime_dirs do |exe|
+    resolved = safe_realpath(exe.to_s)
+    return [] unless resolved
+
+    dirs = []
+    dirs << File.dirname(resolved)
+
+    # Detect common relocatable runtime layouts and add their installation
+    # root (the directory above bin/).
+    case resolved
+    when %r{/\.rvm/rubies/},     # RVM Ruby:  .../.rvm/rubies/ruby-3.3.1/bin/ruby
+         %r{/\.rvm/gems/},       # RVM gems:  .../.rvm/gems/ruby-3.3.1/bin/rake
+         %r{/\.rbenv/versions/}, # rbenv:     .../.rbenv/versions/3.3.1/bin/ruby
+         %r{/\.pyenv/versions/}, # pyenv:     .../.pyenv/versions/3.12.0/bin/python
+         %r{/envs/},             # Conda/virtualenv: .../envs/myenv/bin/python
+         %r{/Cellar/}            # Homebrew:  /opt/homebrew/Cellar/ruby/3.3.1/bin/ruby
+      dirs << resolved.sub(%r{/bin/.*$}, '')
+    end
+
+    dirs.uniq
+  end
+
+  # Scan $PATH entries for known relocatable runtime layouts (RVM, rbenv,
+  # pyenv, Conda, Homebrew) and return their installation roots.
+  #
+  # Unlike runtime_dirs(exe) which derives dirs from a single resolved
+  # executable, this helper ensures that ALL relocatable runtimes visible
+  # through $PATH are mounted.  This is necessary for shell-based tasks
+  # (e.g. `bash -c 'type ruby'`) where the script may invoke interpreters
+  # that differ from the tool itself.
+  #
+  # Only directories matching recognized runtime-manager patterns are
+  # returned — arbitrary $PATH entries are NOT bound.
+  helper :path_runtime_dirs do
+    dirs = []
+    ENV['PATH'].to_s.split(File::PATH_SEPARATOR).each do |entry|
+      next if entry.nil? || entry.empty?
+      expanded = File.expand_path(entry)
+      next unless File.directory?(expanded)
+
+      case expanded
+      when %r{/\.rvm/}, %r{/\.rbenv/}, %r{/\.pyenv/},
+           %r{/envs/[^/]+/bin$}, %r{/Cellar/}
+        # Add the bin dir itself...
+        dirs << expanded
+        # ...and its installation root (parent of bin).
+        root = expanded.sub(%r{/bin/?$}, '')
+        dirs << root unless root == expanded
+      end
+    end
+    dirs.uniq
+  end
+
   # Run +executable+ with +argv+ (an Array of string arguments) inside a
   # bwrap sandbox when available, falling back to unsandboxed execution
   # with a warning otherwise.
@@ -172,6 +255,20 @@ module ComputerUse
         bwrap_args.concat(['--setenv', 'PATH', path_env])
       end
 
+      # --- Resolve the executable's real path (handles symlinked interpreters) ---
+      resolved_exec = resolve_executable(executable)
+
+      # --- Add runtime directories needed by the resolved executable ---
+      # This ensures relocatable runtime trees (RVM, Conda, pyenv, ...) are
+      # mounted so the interpreter can find its libs, gems, etc.
+      read_dirs.concat(runtime_dirs(resolved_exec))
+
+      # --- Also scan $PATH for known relocatable runtime layouts ---
+      # This is needed for shell-based tasks (e.g. `bash -c 'type ruby'`)
+      # where the script may invoke interpreters that differ from the tool
+      # (bash) being sandboxed.
+      read_dirs.concat(path_runtime_dirs)
+
       # --- Deduplicate read and writable dirs to avoid redundant mounts ---
       deduped_read     = deduplicate_paths(read_dirs)
       deduped_writable = deduplicate_paths(writable_dirs)
@@ -199,9 +296,6 @@ module ComputerUse
 
       # End of bwrap args marker.
       bwrap_args << '--'
-
-      # --- Resolve the executable's real path (handles symlinked interpreters) ---
-      resolved_exec = safe_realpath(executable.to_s) || executable.to_s
 
       # --- Build the full command as an argv array ---
       full_argv = [bwrap.to_s] + bwrap_args + [resolved_exec] + Array(argv).map(&:to_s)
