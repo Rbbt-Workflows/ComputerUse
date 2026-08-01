@@ -29,6 +29,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
   test_ls
   test_patch
   web_search
+
+	 exec
  }
  bin=bin filter="*"{
  }

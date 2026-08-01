@@ -1,83 +1,239 @@
 module ComputerUse
   require 'open3'
 
-  helper :sandbox_run do |tool, cmd, options = {}, writable_dirs = []|
-    # Prefer explicit bwrap path if provided in env
+  # Compute the canonical realpath of a path, returning nil if the path
+  # does not exist or cannot be resolved.
+  helper :safe_realpath do |path|
+    return nil if path.nil?
+    File.realpath(path.to_s)
+  rescue Errno::ENOENT, Errno::ENOTDIR, ArgumentError
+    nil
+  end
+
+  # Determine the destination path for a bwrap bind mount.
+  #
+  # For system directories whose symlink topology is part of the filesystem
+  # ABI (/bin -> /usr/bin, /lib64 -> /usr/lib64, ...), we must preserve the
+  # original path as the destination so that programs inside the sandbox see
+  # the symlinks they expect.
+  #
+  # For user-supplied directories, if the destination traverses a symlink
+  # (e.g. /home/user/tmp -> /fast/user/tmp), we fall back to the realpath
+  # so bwrap can create the mount point.
+  helper :bind_destination do |path|
+    path = path.to_s
+    # System paths whose symlinks are part of the ABI - never canonicalize.
+    case path
+    when '/bin', '/lib', '/lib64', '/lib32',
+         '/usr', '/usr/bin', '/usr/lib', '/usr/lib64', '/usr/lib32',
+         '/etc', '/opt', '/sbin', '/usr/sbin'
+      return path
+    end
+
+    # Check whether the *directory component* of path traverses a symlink.
+    # If dirname(path) != realpath(dirname(path)), then an intermediate
+    # component is a symlink and bwrap would fail to create the mount point.
+    dir = File.dirname(path)
+    real_dir = safe_realpath(dir)
+    return path if real_dir.nil? || real_dir == dir
+
+    # Intermediate symlink detected: use the realpath as destination so
+    # bwrap can reach it.
+    safe_realpath(path) || path
+  rescue
+    path
+  end
+
+  # Add a single bind mount to the bwrap_args array.
+  # +mode+ is '--bind' (writable) or '--ro-bind' (read-only).
+  helper :add_bind_mount do |args, mode, path|
+    path = File.expand_path(path.to_s)
+    return args unless File.exist?(path)
+
+    src = safe_realpath(path)
+    return args if src.nil?
+
+    dst = bind_destination(path)
+
+    args.concat([mode, src, dst])
+  end
+
+  # Remove paths whose *destination* is already covered by another path's
+  # destination.  This prevents redundant mounts such as binding both
+  # /fast and /fast/mvazque2/tmp when the latter is already reachable
+  # through the former.
+  #
+  # IMPORTANT: we deduplicate based on the *destination* (what is visible
+  # inside the sandbox), NOT the canonical source.  This is critical because
+  # system paths like /bin (canonical /usr/bin) must NOT be filtered out
+  # just because /usr is already bound -- they need their own mount point so
+  # the symlink topology (/bin, /lib64, ...) is preserved inside the sandbox.
+  helper :deduplicate_paths do |paths|
+    # Build [original, destination] pairs, skipping non-existent paths.
+    pairs = paths.map do |p|
+      expanded = File.expand_path(p.to_s)
+      next nil unless File.exist?(expanded)
+      dst = bind_destination(expanded)
+      [expanded, dst]
+    end.compact
+
+    # Sort by destination so parents come before children.
+    pairs.sort_by! { |_orig, dst| dst }
+
+    kept = []
+    kept_destinations = []
+
+    pairs.each do |orig, dst|
+      # Skip if this destination is already under a kept parent destination.
+      next if kept_destinations.any? { |parent| dst == parent || dst.start_with?(parent + "/") }
+      kept << orig
+      kept_destinations << dst
+    end
+
+    kept
+  end
+
+  # Locate the bwrap executable without shelling out to `which`.
+  helper :find_bwrap do
+    # 1. Explicit config/env override.
     bwrap = config(:path, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
-    bwrap = `which bwrap 2>/dev/null`.strip if bwrap.nil?
+    return bwrap unless bwrap.nil? || bwrap.to_s.empty?
 
-    bwrap_dirs = ComputerUse.get_allowed_dirs :bwrap_dirs
-    bwrap_read_dirs = ComputerUse.get_allowed_dirs :bwrap_read_dirs
+    # 2. Search PATH manually.
+    ENV['PATH'].to_s.split(File::PATH_SEPARATOR).each do |dir|
+      candidate = File.join(dir, 'bwrap')
+      return candidate if File.executable?(candidate) && File.file?(candidate)
+    end
 
-    writable_dirs = ComputerUse.allowed_dirs.dup
-    read_dirs = ComputerUse.allowed_read_dirs.dup
+    nil
+  end
 
-    writable_dirs += bwrap_dirs if bwrap_dirs
-    read_dirs += bwrap_read_dirs if bwrap_read_dirs
+  # Run +executable+ with +argv+ (an Array of string arguments) inside a
+  # bwrap sandbox when available, falling back to unsandboxed execution
+  # with a warning otherwise.
+  #
+  # +executable+ is the interpreter/program path (e.g. "bash", "python3",
+  # "/usr/bin/ruby").  Symlinks on the executable itself are resolved via
+  # File.realpath before execution.
+  #
+  # +argv+ is the argument list for the executable (e.g. ["-c", "echo hi"]).
+  helper :sandbox_run do |executable, argv, options = {}, writable_dirs = []|
+    bwrap = find_bwrap
+
+    bwrap_dirs       = ComputerUse.get_allowed_dirs(:bwrap_dirs)
+    bwrap_read_dirs  = ComputerUse.get_allowed_dirs(:bwrap_read_dirs)
+
+    writable_dirs += ComputerUse.allowed_dirs.dup
+    read_dirs      = ComputerUse.allowed_read_dirs.dup
+
+    writable_dirs += bwrap_dirs      if bwrap_dirs
+    read_dirs     += bwrap_read_dirs if bwrap_read_dirs
+
+    # Add per-call writable dirs (e.g. step files_dir) - callers may pass extras.
+    writable_dirs = Array(writable_dirs).flatten.compact.uniq
+
+    # Ensure root is writable so the sandbox can access repo files.
+    root_dir = nil
+    begin
+      root_dir = ComputerUse.root
+    rescue
+    end
+    if root_dir && !root_dir.to_s.empty?
+      writable_dirs << root_dir.to_s
+    end
 
     writable_dirs.uniq!
     read_dirs.uniq!
     read_dirs -= writable_dirs
 
-    if bwrap && !bwrap.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
-      # Build bwrap argument list. Bind readonly system dirs so interpreter can run.
-      bwrap_args = ['--unshare-all', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev']
+    use_bwrap = bwrap && !bwrap.to_s.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
 
-      # Readonly binds 
-      read_dirs.each do |p|
-        if File.exist?(File.expand_path(p))
-          bwrap_args += ['--ro-bind', p, p]
-        end
+    if use_bwrap
+      Log.debug "ComputerUse sandbox_run read_dirs: #{read_dirs.inspect}, writable_dirs: #{writable_dirs.inspect}"
+
+      # --- Build bwrap argument list (as an argv array, never a string) ---
+
+      bwrap_args = ['--unshare-all']
+
+      # Bind /tmp writable so temp files survive across subprocesses.
+      bwrap_args.concat(['--bind', '/tmp', '/tmp'])
+
+      bwrap_args.concat(['--proc', '/proc'])
+      bwrap_args.concat(['--dev', '/dev'])
+
+      # Set HOME and PATH explicitly for deterministic execution.
+      home = ENV['HOME']
+      if home && !home.empty?
+        bwrap_args.concat(['--setenv', 'HOME', home])
       end
 
-      # Also bind any additional writable dirs requested (e.g. self.files_dir)
-      writable_dirs.each do |d|
-        next unless File.exist?(d)
-        next unless d
-        bwrap_args += ['--bind', d.to_s, d.to_s]
+      path_env = ENV['PATH']
+      if path_env && !path_env.empty?
+        bwrap_args.concat(['--setenv', 'PATH', path_env])
       end
 
-      # Bind the ComputerUse.root writable so the sandbox can access repo files
-      begin
-        root_dir = ComputerUse.root
-        if root_dir && !root_dir.to_s.empty?
-          bwrap_args += ['--bind', root_dir.to_s, root_dir.to_s]
-        end
-      rescue => _e
-        # ignore if root not available
+      # --- Deduplicate read and writable dirs to avoid redundant mounts ---
+      deduped_read     = deduplicate_paths(read_dirs)
+      deduped_writable = deduplicate_paths(writable_dirs)
+      # Remove writable paths from the read list (writable takes precedence).
+      writable_destinations = deduped_writable.map { |p| bind_destination(File.expand_path(p.to_s)) }.compact
+      deduped_read = deduped_read.reject do |p|
+        dst = bind_destination(File.expand_path(p.to_s))
+        dst && writable_destinations.any? { |wdst| dst == wdst || dst.start_with?(wdst + "/") }
       end
 
-      # Ensure we chdir into the repo root if available
+      # --- Bind read-only directories ---
+      deduped_read.each do |d|
+        add_bind_mount(bwrap_args, '--ro-bind', d)
+      end
+
+      # --- Bind writable directories ---
+      deduped_writable.each do |d|
+        add_bind_mount(bwrap_args, '--bind', d)
+      end
+
+      # Ensure we chdir into the repo root if available.
       if root_dir && !root_dir.to_s.empty?
-        bwrap_args += ['--chdir', root_dir.to_s]
+        bwrap_args.concat(['--chdir', root_dir.to_s])
       end
 
-      # End of bwrap args marker
+      # End of bwrap args marker.
       bwrap_args << '--'
 
-      cmd = (bwrap_args + [tool.to_s])*" " << ' ' << (Array === cmd ? cmd*" " : cmd.to_s)
+      # --- Resolve the executable's real path (handles symlinked interpreters) ---
+      resolved_exec = safe_realpath(executable.to_s) || executable.to_s
 
-      io = CMD.cmd(bwrap, cmd, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
-      {stdout: io.read, stderr: io.std_err, exit_status: io.exit_status}
+      # --- Build the full command as an argv array ---
+      full_argv = [bwrap.to_s] + bwrap_args + [resolved_exec] + Array(argv).map(&:to_s)
+
+      begin
+        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true))
+        { stdout: io.read, stderr: io.std_err, exit_status: io.exit_status }
+      rescue => e
+        exception_str = e.message + "\n" + (e.backtrace * "\n")
+        { exit_status: -1, stdout: nil, stderr: exception_str }
+      end
     else
-      # Fallback: warn and run unsandboxed
+      # Fallback: warn and run unsandboxed.
       if defined?(Log)
         Log.warn 'bwrap not found — running unsandboxed'
       else
         warn 'bwrap not found — running unsandboxed'
       end
-      cmd_str = case cmd
-                when Array
-                  Shellwords.join(Annotation.purge(cmd))
-                else
-                  cmd
-                end
-      io = CMD.cmd(tool, cmd_str, options.merge(save_stderr: true, pipe: false, no_fail: true, log: true))
-      {exit_status: io.exit_status, stdout: io.read, stderr: io.std_err}
+
+      full_argv = [executable.to_s] + Array(argv).map(&:to_s)
+
+      begin
+        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true))
+        { exit_status: io.exit_status, stdout: io.read, stderr: io.std_err }
+      rescue => e
+        exception_str = e.message + "\n" + (e.backtrace * "\n")
+        { exit_status: -1, stdout: nil, stderr: exception_str }
+      end
     end
   end
 
-  helper :cmd_json do |tool, cmd, options={}, writable_dirs= []|
+  helper :cmd_json do |tool, cmd, options = {}, writable_dirs = []|
     # Normalize command and stdin
     stdin_data = options[:in]
 
@@ -127,7 +283,7 @@ module ComputerUse
     end
 
     # Run inside sandbox (bwrap) when available, fallback to unsandboxed with a warning
-    sandbox_run(tool, cmd, options, writable_dirs)
+    sandbox_run(tool, args_array, options, writable_dirs)
   end
 
   desc <<-EOF
@@ -140,7 +296,7 @@ and STDERR outputs as strings, and exit_status, the exit status of the process
   extension :json
   task 'bash' => :text do |cmd|
     Log.medium "Bash\n" + cmd
-    cmd_json :bash, nil, in: cmd
+    cmd_json :bash, cmd
   end
 
   desc <<-EOF

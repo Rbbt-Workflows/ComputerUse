@@ -11,12 +11,14 @@ module ComputerUse
       thread: Thread.current['allowed_dirs'],
       thread_read: Thread.current['allowed_read_dirs']
     }
+    
+    IndiferentHash.setup(type_defaults)
 
     dir_str = Scout::Config.get(type, :ComputerUse, :computer_use, :sandbox, default: type_defaults[type], env: type.to_s.upcase)
 
     return [] if dir_str.nil?
     dirs = String === dir_str ? dir_str.split(/[,:]/) : dir_str
-    dirs.collect{|dir| Path.setup(dir).find_all}.flatten
+    dirs.collect{|dir| Path.setup(File.expand_path(dir)).find_all}.flatten
   end
 
 

@@ -59,7 +59,7 @@ module ComputerUse
     res = cmd_json :html2markdown, nil, in: html
 
     if res.is_a?(Hash) && res[:exit_status].to_i != 0
-      raise ScoutException, "docling failed (exit=#{res[:exit_status]}): #{res[:stderr].to_s.strip}"
+      raise ScoutException, "docling failed (exit=#{res[:exit_status]}): #{res[:stderr].to_s.strip.gsub("\n", ' ')}"
     end
 
     res[:stdout]
