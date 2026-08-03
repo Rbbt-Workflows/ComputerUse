@@ -236,7 +236,7 @@ module ComputerUse
 
       # --- Build bwrap argument list (as an argv array, never a string) ---
 
-      bwrap_args = ['--unshare-all']
+      bwrap_args = ['--unshare-all', '--die-with-parent']
 
       # Bind /tmp writable so temp files survive across subprocesses.
       bwrap_args.concat(['--bind', '/tmp', '/tmp'])
