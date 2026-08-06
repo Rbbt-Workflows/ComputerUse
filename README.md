@@ -326,13 +326,3 @@ Notes
 - All paths are validated and must remain under the root (current directory of the process) (".." is disallowed). Absolute paths are normalized against the root when possible.
 - When apply_direct is used, existing files are backed up to .bak.<timestamp> and writes are atomic (tmp file then rename).
 
-## brave
-Web search using Brave Search API
-
-Query the Brave Search API to obtain web search results. Requires BRAVE_API_KEY to be set.
-
-Inputs
-- query (required): search string
-
-Outputs
-- Array of {url, text}
