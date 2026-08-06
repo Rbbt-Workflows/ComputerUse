@@ -1,6 +1,22 @@
 module ComputerUse
   require 'open3'
 
+  # Walk every component of an expanded path and return the first
+  # component that is a symlink, or nil if none.
+  #
+  # This is needed because File.symlink?(path) only checks the *last*
+  # component.  The real-world failure was a *parent* component being a
+  # symlink (e.g. /home/user/tmp/scout where tmp -> /fast/user/tmp).
+  helper :symlink_prefix do |path|
+    path = File.expand_path(path.to_s)
+    current = "/"
+    path.split("/").reject(&:empty?).each do |part|
+      current = File.join(current, part)
+      return current if File.symlink?(current)
+    end
+    nil
+  end
+
   # Compute the canonical realpath of a path, returning nil if the path
   # does not exist or cannot be resolved.
   helper :safe_realpath do |path|
@@ -12,36 +28,31 @@ module ComputerUse
 
   # Determine the destination path for a bwrap bind mount.
   #
-  # For system directories whose symlink topology is part of the filesystem
-  # ABI (/bin -> /usr/bin, /lib64 -> /usr/lib64, ...), we must preserve the
-  # original path as the destination so that programs inside the sandbox see
-  # the symlinks they expect.
+  # Source is always safe_realpath.  Destination is the original path
+  # by default, but falls back to safe_realpath when the destination
+  # traverses a symlink (detected via symlink_prefix).
   #
-  # For user-supplied directories, if the destination traverses a symlink
-  # (e.g. /home/user/tmp -> /fast/user/tmp), we fall back to the realpath
-  # so bwrap can create the mount point.
+  # System directories (/bin, /lib64, /usr, /etc, ...) are exempt:
+  # their symlink topology (/bin -> /usr/bin on many distros) is part
+  # of the filesystem ABI and must be preserved inside the sandbox.
   helper :bind_destination do |path|
-    path = path.to_s
+    path = File.expand_path(path.to_s)
+
     # System paths whose symlinks are part of the ABI - never canonicalize.
-    case path
-    when '/bin', '/lib', '/lib64', '/lib32',
-         '/usr', '/usr/bin', '/usr/lib', '/usr/lib64', '/usr/lib32',
-         '/etc', '/opt', '/sbin', '/usr/sbin'
-      return path
+    system_paths = ['/bin', '/sbin', '/lib', '/lib32', '/lib64',
+                    '/usr', '/etc', '/opt']
+    is_system = system_paths.any? do |sp|
+      path == sp || path.start_with?(sp + "/")
     end
+    return path if is_system
 
-    # Check whether the *directory component* of path traverses a symlink.
-    # If dirname(path) != realpath(dirname(path)), then an intermediate
-    # component is a symlink and bwrap would fail to create the mount point.
-    dir = File.dirname(path)
-    real_dir = safe_realpath(dir)
-    return path if real_dir.nil? || real_dir == dir
-
-    # Intermediate symlink detected: use the realpath as destination so
-    # bwrap can reach it.
-    safe_realpath(path) || path
-  rescue
-    path
+    # If any component of the path traverses a symlink, use the canonical
+    # realpath as destination so bwrap can create the mount point.
+    if symlink_prefix(path)
+      safe_realpath(path) || path
+    else
+      path
+    end
   end
 
   # Add a single bind mount to the bwrap_args array.
