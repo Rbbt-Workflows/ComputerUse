@@ -1,6 +1,23 @@
 module ComputerUse
   require 'open3'
 
+  # ===========================================================================
+  # Mount struct — explicit representation of a single bind mount.
+  #
+  # +source+        Canonical host path (File.realpath of the requested path).
+  # +destination+   Path visible inside the sandbox namespace.
+  # +mode+          :ro (read-only) or :rw (read-write).
+  # +requested_path+ The original expanded path requested by the caller.
+  #
+  # The critical invariant: destination is NOT derived from source via
+  # realpath().  It is the path the application expects to use.
+  # ===========================================================================
+  Mount = Struct.new(:source, :destination, :mode, :requested_path, keyword_init: true)
+
+  # ===========================================================================
+  # Utility helpers
+  # ===========================================================================
+
   # Compute the canonical realpath of a path, returning nil if the path
   # does not exist or cannot be resolved.
   helper :safe_realpath do |path|
@@ -10,91 +27,251 @@ module ComputerUse
     nil
   end
 
-  # Add bind mount(s) to the bwrap_args array.
+  # Lexical path-containment test: true if +child+ is the same as +parent+
+  # or is a subdirectory of +parent+.  Uses "/" boundary to avoid false
+  # positives like /foo matching /foobar.
+  helper :path_under? do |child, parent|
+    child == parent || child.start_with?(parent + "/")
+  end
+
+  # Map a mode symbol to the bwrap flag string.
+  helper :mount_mode_flag do |mode|
+    mode == :rw ? '--bind' : '--ro-bind'
+  end
+
+  # Walk every component of an expanded path from root downward and return
+  # the first component that is a symlink on the host, or nil if none.
   #
-  # +mode+ is '--bind' (writable) or '--ro-bind' (read-only).
-  # +mounted+ is an array of already-mounted destinations, mutated in place.
-  #
-  # This helper preserves BOTH the requested namespace (the path the
-  # application uses) and the canonical namespace (File.realpath).
-  #
-  # For a normal path where realpath == path, a single mount is emitted.
-  #
-  # For a path that traverses symlinks (e.g. /home/user/.rbbt/var where
-  # var -> /bulk/rbbt/var), TWO mounts are emitted:
-  #   1. Mount the requested destination (src -> requested_path) so the
-  #      application's namespace is preserved.
-  #   2. Mount the canonical destination (src -> canonical_path) so the
-  #      symlink target actually exists inside the sandbox.
-  #
-  # Edge case: if the requested path itself is a symlink AND one of its
-  # ancestors is already mounted, bwrap cannot mount onto it (the ancestor
-  # mount exposes the host symlink in the namespace). In that case only
-  # the canonical destination is used.
-  #
-  # If the parent is NOT already mounted, bwrap creates a fresh directory
-  # at the destination, so mounting onto a symlink path works fine. This
-  # is critical for system paths like /bin -> /usr/bin where / (the parent)
-  # is never bind-mounted.
-  helper :add_bind_mount do |args, mode, path, mounted = []|
+  # Example: for /home/user/.rbbt/var/jobs where .rbbt/var is a symlink,
+  # returns /home/user/.rbbt/var.
+  helper :first_symlink_component do |path|
     path = File.expand_path(path.to_s)
-    return args unless File.exist?(path)
+    current = "/"
+    path.split("/").reject(&:empty?).each do |part|
+      current = File.join(current, part)
+      return current if File.symlink?(current)
+    end
+    nil
+  end
 
-    src = safe_realpath(path)
-    return args if src.nil?
+  # ===========================================================================
+  # Mount planner — the core of the sandbox construction.
+  #
+  # Transforms requested read/write paths into a complete, validated,
+  # ordered list of Mount objects.  The planner preserves both the
+  # requested namespace (the path the application uses) and the canonical
+  # namespace (File.realpath) so that symlinked paths resolve correctly
+  # inside the sandbox.
+  #
+  # Pipeline stages:
+  #   1. Create initial Mount objects from requested paths.
+  #   2. Compute which destinations will be mounted.
+  #   3. Adjust destinations that traverse symlinks whose parent is mounted.
+  #   4. Add symlink dependency mounts (parent dirs + symlink targets).
+  #   5. Semantic deduplication (same source+dest+mode = duplicate;
+  #      child under same-or-broader-mode parent = redundant).
+  #   6. Resolve read/write conflicts at the same destination.
+  #   7. Sort by destination depth (parents before children).
+  # ===========================================================================
+  helper :plan_mounts do |read_paths, writable_paths|
+    mounts = []
 
-    # Check if any ancestor of path is already mounted. If so, and path
-    # itself is a symlink on the host, bwrap cannot mount onto it (the
-    # ancestor mount exposes the host symlink in the namespace).
-    parent_mounted = mounted.any? { |m| path.start_with?(m + "/") }
-    cannot_mount_onto_path = parent_mounted && File.symlink?(path)
+    # --- Phase 1: Create initial mount objects ---
+    read_paths.each do |p|
+      expanded = File.expand_path(p.to_s)
+      next unless File.exist?(expanded)
+      src = safe_realpath(expanded)
+      next unless src
+      mounts << Mount.new(source: src, destination: expanded, mode: :ro, requested_path: expanded)
+    end
 
-    if !cannot_mount_onto_path
-      # Mount at the requested destination (preserves the application's
-      # namespace). bwrap creates a fresh directory here.
-      unless mounted.include?(path)
-        args.concat([mode, src, path])
-        mounted << path
+    writable_paths.each do |p|
+      expanded = File.expand_path(p.to_s)
+      #next unless File.exist?(expanded)
+      src = safe_realpath(expanded)
+      next unless src
+      mounts << Mount.new(source: src, destination: expanded, mode: :rw, requested_path: expanded)
+    end
+
+    # --- Phase 2: Compute which destinations will be mounted ---
+    # This is used to determine if a symlink's parent directory will be
+    # present in the sandbox (which affects whether we can mount onto a
+    # symlinked destination).
+    all_destinations = mounts.map(&:destination)
+
+    # --- Phase 3: Adjust destinations that traverse symlinks ---
+    #
+    # Key rule (experimentally verified):
+    #   bwrap CANNOT mount onto a destination that is (or traverses) a
+    #   symlink IF the symlink's parent is already mounted in the sandbox.
+    #   When the parent IS mounted, the host symlink is visible in the
+    #   namespace and bwrap's mount() call fails with ENOENT.
+    #
+    #   When the parent is NOT mounted, bwrap creates fresh directories
+    #   at the destination, so mounting onto a symlinked path works fine.
+    #
+    # Therefore: if a mount's destination traverses a symlink AND the
+    # symlink's parent is in the mount set, redirect the destination to
+    # the canonical (realpath) location.
+    mounts.each do |m|
+      sym = first_symlink_component(m.destination)
+      next unless sym
+
+      parent_of_sym = File.dirname(sym)
+
+      # Check if the symlink's parent (or an ancestor) is in the mount set.
+      parent_mounted = all_destinations.any? do |d|
+        path_under?(parent_of_sym, d)
+      end
+
+      if parent_mounted
+        # Cannot mount onto the symlinked destination because the parent
+        # is mounted, making the symlink visible.  Redirect to canonical.
+        m.destination = m.source
+      end
+      # If parent is NOT mounted, keep the original destination — bwrap
+      # will create fresh directories and there's no symlink conflict.
+    end
+
+    # --- Phase 4: Add symlink dependency mounts ---
+    #
+    # For mounts whose destinations were redirected (Phase 3), the
+    # symlink from the parent mount needs its target to exist at the
+    # canonical path so the symlink resolves inside the sandbox.
+    #
+    # Pattern (experimentally verified):
+    #   --ro-bind /home/user/.rbbt     /home/user/.rbbt
+    #   --ro-bind /bulk/user/rbbt/var  /bulk/user/rbbt/var
+    #   → ls /home/user/.rbbt/var/jobs works because the symlink resolves.
+    additional = []
+    mounts.each do |m|
+      sym = first_symlink_component(m.requested_path)
+      next unless sym
+
+      parent_of_sym = File.dirname(sym)
+      target_of_sym = safe_realpath(sym)
+
+      parent_mounted = all_destinations.any? do |d|
+        path_under?(parent_of_sym, d)
+      end
+
+      if parent_mounted && target_of_sym
+        # The symlink target must exist at its canonical path so the
+        # symlink resolves.  Add a read-only mount for the target.
+        already_covered = mounts.any? { |om| path_under?(target_of_sym, om.destination) }
+        already_in_additional = additional.any? { |am| path_under?(target_of_sym, am.destination) }
+
+        unless already_covered || already_in_additional
+          additional << Mount.new(
+            source: target_of_sym,
+            destination: target_of_sym,
+            mode: :ro,
+            requested_path: target_of_sym
+          )
+        end
+      end
+    end
+    mounts.concat(additional)
+
+    # --- Phase 5: Semantic deduplication ---
+    #
+    # Two mounts are exact duplicates only if ALL of (source, destination,
+    # mode) are identical.  Canonical source equality alone is NOT
+    # sufficient — two paths resolving to the same host object but at
+    # different sandbox destinations are NOT duplicates.
+    #
+    # A child mount is redundant (can be removed) if:
+    #   - Its destination is under a parent mount's destination.
+    #   - The parent has the SAME mode (ro parent + ro child, or rw parent + rw child).
+    #     Different-mode children are NOT redundant: a rw child of a ro parent
+    #     must remain to provide writable access, and a ro child of a rw parent
+    #     must remain to restrict access.
+    mounts = mounts.uniq { |m| [m.source, m.destination, m.mode] }
+
+    mounts = mounts.reject do |candidate|
+      mounts.any? do |other|
+        next false if other.equal?(candidate)
+        next false if candidate.destination == other.destination
+        next false unless path_under?(candidate.destination, other.destination)
+
+        if other.mode == candidate.mode
+          # Same-mode parent covers same-mode child (redundant child).
+          # ro parent covers ro child; rw parent covers rw child.
+          true
+        else
+          # Different modes: child is NOT redundant.
+          # ro parent does not cover rw child.
+          # rw parent does not suppress ro child (ro child is intentional).
+          false
+        end
       end
     end
 
-    # If canonical differs from the requested path, also mount the canonical
-    # destination so symlink targets resolve inside the sandbox.
-    if src != path && !mounted.include?(src)
-      args.concat([mode, src, src])
-      mounted << src
+    # --- Phase 6: Resolve read/write conflicts at same destination ---
+    #
+    # If the same destination has both :ro and :rw mounts, keep only :rw.
+    dest_modes = mounts.group_by(&:destination)
+    mounts = mounts.reject do |m|
+      siblings = dest_modes[m.destination]
+      siblings.any? { |s| s.mode == :rw && m.mode == :ro }
     end
 
-    args
+    # --- Phase 7: Sort by destination depth (parents before children) ---
+    mounts.sort_by! { |m| [m.destination.count("/"), m.destination] }
+
+    mounts
   end
 
-  # Remove paths that are already covered by a parent path.
-  #
-  # Deduplication operates ONLY on the requested (expanded) paths.
-  # It does NOT use File.realpath or any canonical path information.
-  # This is critical because:
-  #   - System paths like /bin (canonical /usr/bin) must NOT be filtered
-  #     out just because /usr is already bound.
-  #   - Paths through symlinks (e.g. /home/user/.rbbt/var) must remain
-  #     distinct from their canonical targets (/bulk/rbbt/var).
-  helper :deduplicate_paths do |paths|
-    expanded = paths
-      .map { |p| File.expand_path(p.to_s) }
-      .select { |p| File.exist?(p) }
-      .uniq
+  # ===========================================================================
+  # Diagnostic logging — structured mount plan before bwrap execution.
+  # ===========================================================================
+  helper :log_mount_plan do |mounts|
+    lines = ["SANDBOX MOUNT PLAN (#{mounts.length} mounts)"]
+    mounts.each do |m|
+      flag = mount_mode_flag(m.mode)
+      tag = m.mode == :rw ? 'RW' : 'RO'
+      if m.source == m.destination
+        lines << "  #{tag}  #{m.destination}"
+      else
+        lines << "  #{tag}  #{m.source} -> #{m.destination}"
+      end
 
-    # Sort by depth so parents come before children.
-    expanded.sort_by! { |p| p.split("/").length }
-
-    kept = []
-    expanded.each do |path|
-      next if kept.any? { |k| path == k || path.start_with?(k + "/") }
-      kept << path
+      # Log symlink dependency info if the requested path differs from destination
+      if m.requested_path != m.destination
+        lines << "       (requested: #{m.requested_path})"
+      end
     end
-    kept
+    Log.debug lines.join("\n")
   end
 
-  # Locate the bwrap executable without shelling out to `which`.
+  # ===========================================================================
+  # Validation — check the mount plan before bwrap execution.
+  # ===========================================================================
+  helper :validate_mount_plan do |mounts|
+    mounts.each do |m|
+      unless File.exist?(m.source)
+        Log.warn "ComputerUse sandbox: mount source does not exist: #{m.source}"
+      end
+      unless m.source.to_s.start_with?("/")
+        Log.warn "ComputerUse sandbox: mount source is not absolute: #{m.source}"
+      end
+      unless m.destination.to_s.start_with?("/")
+        Log.warn "ComputerUse sandbox: mount destination is not absolute: #{m.destination}"
+      end
+    end
+
+    # Check for destination conflicts (same dest, conflicting modes not resolved)
+    dest_groups = mounts.group_by(&:destination)
+    dest_groups.each do |dest, group|
+      if group.length > 1
+        Log.warn "ComputerUse sandbox: multiple mounts at #{dest}: #{group.map(&:mode).inspect}"
+      end
+    end
+  end
+
+  # ===========================================================================
+  # bwrap executable discovery (no shell-out to `which`).
+  # ===========================================================================
   helper :find_bwrap do
     # 1. Explicit config/env override.
     bwrap = config(:path, :bwrap, :sandbox, :sandbox_run, env: 'BWRAP_PATH')
@@ -109,15 +286,9 @@ module ComputerUse
     nil
   end
 
-  # Resolve an executable to its canonical absolute path.
-  #
-  # If +exe+ is already an absolute or relative path to an existing file,
-  # symlinks are resolved via File.realpath.
-  #
-  # If +exe+ is a bare name (e.g. "ruby", "python3"), it is looked up in
-  # $PATH first, then symlinks are resolved.  This is critical so that
-  # runtime_dirs() can correctly identify the installation tree for
-  # relocatable runtimes like RVM, pyenv, or Conda.
+  # ===========================================================================
+  # Executable resolution — resolve bare names via $PATH, then realpath.
+  # ===========================================================================
   helper :resolve_executable do |exe|
     return exe.to_s if exe.nil? || exe.to_s.empty?
     resolved = safe_realpath(exe.to_s)
@@ -130,15 +301,14 @@ module ComputerUse
     found ? safe_realpath(File.join(found, exe.to_s)) || exe.to_s : exe.to_s
   end
 
+  # ===========================================================================
+  # Runtime directory discovery for relocatable runtimes.
+  # ===========================================================================
+
   # Compute the minimal set of directories needed to run +exe+ inside a
-  # bwrap sandbox.  This goes beyond just the bin/ directory containing the
-  # executable: for relocatable runtime environments (RVM, rbenv, Conda,
-  # pyenv, Homebrew, ...) the entire installation tree must be mounted so
-  # that relative references (../lib, ../share, gem directories, etc.)
-  # resolve correctly.
-  #
-  # Returns an Array of directory paths (deduplicated).  Returns an empty
-  # Array if the executable cannot be resolved.
+  # bwrap sandbox.  For relocatable runtime environments (RVM, rbenv,
+  # Conda, pyenv, Homebrew, ...) the entire installation tree must be
+  # mounted so that relative references resolve correctly.
   helper :runtime_dirs do |exe|
     resolved = safe_realpath(exe.to_s)
     return [] unless resolved
@@ -146,32 +316,22 @@ module ComputerUse
     dirs = []
     dirs << File.dirname(resolved)
 
-    # Detect common relocatable runtime layouts and add their installation
-    # root (the directory above bin/).
     case resolved
-    when %r{/\.rvm/rubies/},     # RVM Ruby:  .../.rvm/rubies/ruby-3.3.1/bin/ruby
-         %r{/\.rvm/gems/},       # RVM gems:  .../.rvm/gems/ruby-3.3.1/bin/rake
-         %r{/\.rbenv/versions/}, # rbenv:     .../.rbenv/versions/3.3.1/bin/ruby
-         %r{/\.pyenv/versions/}, # pyenv:     .../.pyenv/versions/3.12.0/bin/python
-         %r{/envs/},             # Conda/virtualenv: .../envs/myenv/bin/python
-         %r{/Cellar/}            # Homebrew:  /opt/homebrew/Cellar/ruby/3.3.1/bin/ruby
+    when %r{/\.rvm/rubies/},     # RVM Ruby
+         %r{/\.rvm/gems/},       # RVM gems
+         %r{/\.rbenv/versions/}, # rbenv
+         %r{/\.pyenv/versions/}, # pyenv
+         %r{/envs/},             # Conda/virtualenv
+         %r{/Cellar/}            # Homebrew
       dirs << resolved.sub(%r{/bin/.*$}, '')
     end
 
     dirs.uniq
   end
 
-  # Scan $PATH entries for known relocatable runtime layouts (RVM, rbenv,
-  # pyenv, Conda, Homebrew) and return their installation roots.
-  #
-  # Unlike runtime_dirs(exe) which derives dirs from a single resolved
-  # executable, this helper ensures that ALL relocatable runtimes visible
-  # through $PATH are mounted.  This is necessary for shell-based tasks
-  # (e.g. `bash -c 'type ruby'`) where the script may invoke interpreters
-  # that differ from the tool itself.
-  #
-  # Only directories matching recognized runtime-manager patterns are
-  # returned — arbitrary $PATH entries are NOT bound.
+  # Scan $PATH entries for known relocatable runtime layouts and return
+  # their installation roots.  Needed for shell-based tasks where the
+  # script may invoke interpreters that differ from the tool itself.
   helper :path_runtime_dirs do
     dirs = []
     ENV['PATH'].to_s.split(File::PATH_SEPARATOR).each do |entry|
@@ -182,9 +342,7 @@ module ComputerUse
       case expanded
       when %r{/\.rvm/}, %r{/\.rbenv/}, %r{/\.pyenv/},
            %r{/envs/[^/]+/bin$}, %r{/Cellar/}
-        # Add the bin dir itself...
         dirs << expanded
-        # ...and its installation root (parent of bin).
         root = expanded.sub(%r{/bin/?$}, '')
         dirs << root unless root == expanded
       end
@@ -192,15 +350,13 @@ module ComputerUse
     dirs.uniq
   end
 
-  # Run +executable+ with +argv+ (an Array of string arguments) inside a
-  # bwrap sandbox when available, falling back to unsandboxed execution
-  # with a warning otherwise.
+  # ===========================================================================
+  # sandbox_run — execute +executable+ with +argv+ inside a bwrap sandbox.
   #
-  # +executable+ is the interpreter/program path (e.g. "bash", "python3",
-  # "/usr/bin/ruby").  Symlinks on the executable itself are resolved via
-  # File.realpath before execution.
-  #
-  # +argv+ is the argument list for the executable (e.g. ["-c", "echo hi"]).
+  # Uses the mount planner to construct a principled, namespace-preserving
+  # set of bind mounts.  Falls back to unsandboxed execution with a warning
+  # when bwrap is not available.
+  # ===========================================================================
   helper :sandbox_run do |executable, argv, options = {}, writable_dirs = []|
     bwrap = find_bwrap
 
@@ -228,15 +384,28 @@ module ComputerUse
 
     writable_dirs.uniq!
     read_dirs.uniq!
-    read_dirs -= writable_dirs
 
     use_bwrap = bwrap && !bwrap.to_s.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
 
     if use_bwrap
       Log.debug "ComputerUse sandbox_run read_dirs: #{read_dirs.inspect}, writable_dirs: #{writable_dirs.inspect}"
 
-      # --- Build bwrap argument list (as an argv array, never a string) ---
+      # --- Resolve the executable's real path ---
+      resolved_exec = resolve_executable(executable)
 
+      # --- Add runtime directories needed by the resolved executable ---
+      read_dirs.concat(runtime_dirs(resolved_exec))
+
+      # --- Scan $PATH for known relocatable runtime layouts ---
+      read_dirs.concat(path_runtime_dirs)
+
+      # --- Plan all mounts using the mount planner ---
+      mounts = plan_mounts(read_dirs, writable_dirs)
+
+      log_mount_plan(mounts)
+      validate_mount_plan(mounts)
+
+      # --- Build bwrap argument list (as an argv array, never a string) ---
       bwrap_args = ['--unshare-all', '--die-with-parent']
 
       # Bind /tmp writable so temp files survive across subprocesses.
@@ -256,59 +425,12 @@ module ComputerUse
         bwrap_args.concat(['--setenv', 'PATH', path_env])
       end
 
-      # --- Resolve the executable's real path (handles symlinked interpreters) ---
-      resolved_exec = resolve_executable(executable)
-
-      # --- Add runtime directories needed by the resolved executable ---
-      # This ensures relocatable runtime trees (RVM, Conda, pyenv, ...) are
-      # mounted so the interpreter can find its libs, gems, etc.
-      read_dirs.concat(runtime_dirs(resolved_exec))
-
-      # --- Also scan $PATH for known relocatable runtime layouts ---
-      # This is needed for shell-based tasks (e.g. `bash -c 'type ruby'`)
-      # where the script may invoke interpreters that differ from the tool
-      # (bash) being sandboxed.
-      read_dirs.concat(path_runtime_dirs)
-
-      # --- Deduplicate read and writable dirs to avoid redundant mounts ---
-      deduped_read     = deduplicate_paths(read_dirs)
-      deduped_writable = deduplicate_paths(writable_dirs)
-
-      # Remove read mounts shadowed by writable mounts (plain path comparison).
-      # Writable takes precedence: if a writable path covers a read path
-      # (or vice versa), the read path is removed.
-      deduped_read = deduped_read.reject do |rp|
-        deduped_writable.any? do |wp|
-          rp == wp || rp.start_with?(wp + "/") || wp.start_with?(rp + "/")
-        end
+      # --- Emit application/user mounts from the planned mount list ---
+      # Mounts are already sorted parents-before-children by plan_mounts.
+      mounts.each do |m|
+        flag = mount_mode_flag(m.mode)
+        bwrap_args.concat([flag, m.source, m.destination])
       end
-
-      # --- Track mounted destinations so add_bind_mount knows which
-      #     parts of the namespace already exist ---
-      mounted = []
-
-      # --- Bind read-only directories ---
-      deduped_read.each do |d|
-        add_bind_mount(bwrap_args, '--ro-bind', d, mounted)
-      end
-
-      # --- Bind writable directories ---
-      deduped_writable.each do |d|
-        add_bind_mount(bwrap_args, '--bind', d, mounted)
-      end
-
-      # --- Debug: log the final mount list ---
-      mounts = []
-      i = 0
-      while i < bwrap_args.length
-        if ['--bind', '--ro-bind'].include?(bwrap_args[i])
-          mounts << "#{bwrap_args[i]} #{bwrap_args[i+1]} -> #{bwrap_args[i+2]}"
-          i += 3
-        else
-          i += 1
-        end
-      end
-      Log.debug "ComputerUse sandbox mounts:\n  " + mounts.join("\n  ")
 
       # Ensure we chdir into the repo root if available.
       if root_dir && !root_dir.to_s.empty?
@@ -348,6 +470,9 @@ module ComputerUse
     end
   end
 
+  # ===========================================================================
+  # cmd_json — build interpreter args and delegate to sandbox_run.
+  # ===========================================================================
   helper :cmd_json do |tool, cmd, options = {}, writable_dirs = []|
     # Normalize command and stdin
     stdin_data = options[:in]
@@ -368,38 +493,38 @@ module ComputerUse
                    # For python, ruby and R-like interpreters prefer running files when a path is given.
                    if cmd && File.exist?(cmd.to_s)
                      if interpreter == 'R'
-                       # When using 'R' as the interpreter, supply flags to run a file non-interactively
                        ['--slave', '-f', cmd.to_s]
                      else
                        [cmd.to_s]
                      end
                    else
-                     # If no file, read from stdin when provided, otherwise pass the cmd as single arg
                      if interpreter == 'R' && stdin_data
-                       # For 'R' reading from stdin, use '-' to indicate stdin
                        ['-']
                      else
                        stdin_data ? ['-'] : [cmd.to_s]
                      end
                    end
                  else
-                   # Generic program: if cmd present and is a string, supply as single arg; if nil, empty args
                    cmd ? [cmd.to_s] : []
                  end
 
     # Ensure args are strings
     args_array = Array(args_array).collect(&:to_s)
 
-    # Collect writable dirs to expose inside the sandbox: prefer step files_dir if available
+    # Collect writable dirs to expose inside the sandbox
     writable_dirs = ComputerUse.get_allowed_dirs(:allowed_dirs)
     begin
       writable_dirs << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
     rescue => _e
     end
 
-    # Run inside sandbox (bwrap) when available, fallback to unsandboxed with a warning
+    # Run inside sandbox (bwrap) when available, fallback to unsandboxed
     sandbox_run(tool, args_array, options, writable_dirs)
   end
+
+  # ===========================================================================
+  # Task definitions
+  # ===========================================================================
 
   desc <<-EOF
 Run a bash command.
@@ -425,7 +550,6 @@ stderr and exit_status.
   input :file, :path, 'File to run'
   extension :json
   task :python => :text do |code, file|
-    # Prefer provided file, otherwise write code to a temp file in root
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -437,7 +561,6 @@ stderr and exit_status.
       raise ParameterException, 'Provide either a file or code to run'
     end
 
-    # Prefer python3 if available
     cmd_name = nil
     ['python3', 'python'].each do |p|
       begin
@@ -464,7 +587,7 @@ stderr and exit_status.
 Run a file or code using ruby.
 
 If `file` is provided it will be executed. Otherwise `code` will be written to a temporary
-file under the task `root` and executed. 
+file under the task `root` and executed.
 
 Returns a JSON object with keys stdout, stderr and exit_status.
   EOF
@@ -472,7 +595,6 @@ Returns a JSON object with keys stdout, stderr and exit_status.
   input :file, :path, 'File to run'
   extension :json
   task :ruby => :text do |code, file|
-    # Prefer provided file, otherwise write code to a temp file in root
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -503,7 +625,6 @@ Returns a JSON object with keys stdout, stderr and exit_status.
   input :file, :path, 'File to run'
   extension :json
   task :r => :text do |code, file|
-    # Prefer provided file, otherwise write code to a temp file in root
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -515,7 +636,6 @@ Returns a JSON object with keys stdout, stderr and exit_status.
       raise ParameterException, 'Provide either a file or code to run'
     end
 
-    # Prefer Rscript if available, otherwise fall back to R
     cmd_name = nil
     ['Rscript', 'R'].each do |p|
       begin
