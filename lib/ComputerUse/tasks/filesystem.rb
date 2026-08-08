@@ -18,7 +18,14 @@ module ComputerUse
 
     return [] if dir_str.nil?
     dirs = String === dir_str ? dir_str.split(/[,:]/) : dir_str
-    dirs.collect{|dir| Path.setup(File.expand_path(dir)).find_all}.flatten
+    dirs.collect{|dir| 
+      dir = Path.setup(File.expand_path(dir))
+      if dir.located?
+        dir
+      else
+        dir.find_all
+      end
+    }.flatten
   end
 
 
@@ -46,11 +53,11 @@ module ComputerUse
     if Open.exists?(path) || Open.directory?(path)
       return path if Open.realpath(directory) == Open.realpath(path)
       if Misc.path_relative_to(File.expand_path(Open.realpath(directory)), File.expand_path(Open.realpath(path))).nil?
-        raise ParameterException, "File #{path} not under #{directory}"
+        raise SandboxAccessViolation, "File #{path} not under #{directory}"
       end
     else
       if Misc.path_relative_to(File.expand_path(directory), File.expand_path(path)).nil?
-        raise ParameterException, "File #{path} not under #{directory}"
+        raise SandboxAccessViolation, "File #{path} not under #{directory}"
       end
     end
     return path
@@ -62,13 +69,13 @@ module ComputerUse
 
     begin
       inside?(ComputerUse.root, path)
-    rescue => e
+    rescue 
       ComputerUse.allowed_dirs.each do |dir|
         dir = File.expand_path(dir)
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
-        rescue
+        rescue 
           next
         end
       end
@@ -78,12 +85,18 @@ module ComputerUse
         dir = Path.setup dir unless Path === dir
         begin
           return inside?(dir, path)
-        rescue
+        rescue 
           next
         end
       end if type.to_s == 'read'
 
-      raise e
+      if type.to_s == 'read'
+        all_dirs = [ComputerUse.root, ComputerUse.allowed_dirs, ComputerUse.allowed_read_dirs].flatten.compact.uniq
+        raise SandboxAccessViolation, "Path #{path} not read allowed: #{all_dirs}"
+      else
+        all_dirs = [ComputerUse.root, ComputerUse.allowed_dirs].flatten.compact.uniq
+        raise SandboxAccessViolation, "Path #{path} not write allowed: #{allowed_dirs}"
+      end
     end
   end
 
@@ -93,7 +106,7 @@ Write a file.
   input :path, :path, 'File to write', nil, required: true
   input :content, :text, 'Content to write into the file', nil, required: true
   task :write => :string do |file,content|
-    file = normalize file
+    file = normalize file, :write
     raise ParameterException, "File is a directory: #{file}" if Open.directory?(file)
     Open.write file, content
     "success writing to #{file}"
@@ -295,7 +308,7 @@ no need to create directories in the target, they will be created automatically
   input :source, :path, 'File or directory to copy', nil, required: true
   input :target, :path, 'Target path', nil, required: true
   task :copy => :string do |source,target|
-    #source = normalize source, :read
+    source = normalize source, :read
     target = normalize target, :write
     raise ParameterException, "Source file not found: #{source}" unless Open.exists?(source)
     raise ParameterException, "Root path cannot be deleted" if File.expand_path(file) == File.expand_path(ComputerUse.root)

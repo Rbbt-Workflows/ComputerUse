@@ -1,0 +1,2 @@
+class SandboxAccessViolation < ScoutException
+end

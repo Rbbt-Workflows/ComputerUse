@@ -13,6 +13,7 @@ module ComputerUse
   export_exec :current_time
 end
 
+require_relative 'lib/ComputerUse/exceptions'
 require_relative 'lib/ComputerUse/tasks/filesystem'
 require_relative 'lib/ComputerUse/tasks/exec'
 require_relative 'lib/ComputerUse/tasks/patch'

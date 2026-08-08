@@ -1,22 +1,6 @@
 module ComputerUse
   require 'open3'
 
-  # Walk every component of an expanded path and return the first
-  # component that is a symlink, or nil if none.
-  #
-  # This is needed because File.symlink?(path) only checks the *last*
-  # component.  The real-world failure was a *parent* component being a
-  # symlink (e.g. /home/user/tmp/scout where tmp -> /fast/user/tmp).
-  helper :symlink_prefix do |path|
-    path = File.expand_path(path.to_s)
-    current = "/"
-    path.split("/").reject(&:empty?).each do |part|
-      current = File.join(current, part)
-      return current if File.symlink?(current)
-    end
-    nil
-  end
-
   # Compute the canonical realpath of a path, returning nil if the path
   # does not exist or cannot be resolved.
   helper :safe_realpath do |path|
@@ -26,81 +10,87 @@ module ComputerUse
     nil
   end
 
-  # Determine the destination path for a bwrap bind mount.
+  # Add bind mount(s) to the bwrap_args array.
   #
-  # Source is always safe_realpath.  Destination is the original path
-  # by default, but falls back to safe_realpath when the destination
-  # traverses a symlink (detected via symlink_prefix).
-  #
-  # System directories (/bin, /lib64, /usr, /etc, ...) are exempt:
-  # their symlink topology (/bin -> /usr/bin on many distros) is part
-  # of the filesystem ABI and must be preserved inside the sandbox.
-  helper :bind_destination do |path|
-    path = File.expand_path(path.to_s)
-
-    # System paths whose symlinks are part of the ABI - never canonicalize.
-    system_paths = ['/bin', '/sbin', '/lib', '/lib32', '/lib64',
-                    '/usr', '/etc', '/opt']
-    is_system = system_paths.any? do |sp|
-      path == sp || path.start_with?(sp + "/")
-    end
-    return path if is_system
-
-    # If any component of the path traverses a symlink, use the canonical
-    # realpath as destination so bwrap can create the mount point.
-    if symlink_prefix(path)
-      safe_realpath(path) || path
-    else
-      path
-    end
-  end
-
-  # Add a single bind mount to the bwrap_args array.
   # +mode+ is '--bind' (writable) or '--ro-bind' (read-only).
-  helper :add_bind_mount do |args, mode, path|
+  # +mounted+ is an array of already-mounted destinations, mutated in place.
+  #
+  # This helper preserves BOTH the requested namespace (the path the
+  # application uses) and the canonical namespace (File.realpath).
+  #
+  # For a normal path where realpath == path, a single mount is emitted.
+  #
+  # For a path that traverses symlinks (e.g. /home/user/.rbbt/var where
+  # var -> /bulk/rbbt/var), TWO mounts are emitted:
+  #   1. Mount the requested destination (src -> requested_path) so the
+  #      application's namespace is preserved.
+  #   2. Mount the canonical destination (src -> canonical_path) so the
+  #      symlink target actually exists inside the sandbox.
+  #
+  # Edge case: if the requested path itself is a symlink AND one of its
+  # ancestors is already mounted, bwrap cannot mount onto it (the ancestor
+  # mount exposes the host symlink in the namespace). In that case only
+  # the canonical destination is used.
+  #
+  # If the parent is NOT already mounted, bwrap creates a fresh directory
+  # at the destination, so mounting onto a symlink path works fine. This
+  # is critical for system paths like /bin -> /usr/bin where / (the parent)
+  # is never bind-mounted.
+  helper :add_bind_mount do |args, mode, path, mounted = []|
     path = File.expand_path(path.to_s)
     return args unless File.exist?(path)
 
     src = safe_realpath(path)
     return args if src.nil?
 
-    dst = bind_destination(path)
+    # Check if any ancestor of path is already mounted. If so, and path
+    # itself is a symlink on the host, bwrap cannot mount onto it (the
+    # ancestor mount exposes the host symlink in the namespace).
+    parent_mounted = mounted.any? { |m| path.start_with?(m + "/") }
+    cannot_mount_onto_path = parent_mounted && File.symlink?(path)
 
-    args.concat([mode, src, dst])
-  end
-
-  # Remove paths whose *destination* is already covered by another path's
-  # destination.  This prevents redundant mounts such as binding both
-  # /fast and /fast/mvazque2/tmp when the latter is already reachable
-  # through the former.
-  #
-  # IMPORTANT: we deduplicate based on the *destination* (what is visible
-  # inside the sandbox), NOT the canonical source.  This is critical because
-  # system paths like /bin (canonical /usr/bin) must NOT be filtered out
-  # just because /usr is already bound -- they need their own mount point so
-  # the symlink topology (/bin, /lib64, ...) is preserved inside the sandbox.
-  helper :deduplicate_paths do |paths|
-    # Build [original, destination] pairs, skipping non-existent paths.
-    pairs = paths.map do |p|
-      expanded = File.expand_path(p.to_s)
-      next nil unless File.exist?(expanded)
-      dst = bind_destination(expanded)
-      [expanded, dst]
-    end.compact
-
-    # Sort by destination so parents come before children.
-    pairs.sort_by! { |_orig, dst| dst }
-
-    kept = []
-    kept_destinations = []
-
-    pairs.each do |orig, dst|
-      # Skip if this destination is already under a kept parent destination.
-      next if kept_destinations.any? { |parent| dst == parent || dst.start_with?(parent + "/") }
-      kept << orig
-      kept_destinations << dst
+    if !cannot_mount_onto_path
+      # Mount at the requested destination (preserves the application's
+      # namespace). bwrap creates a fresh directory here.
+      unless mounted.include?(path)
+        args.concat([mode, src, path])
+        mounted << path
+      end
     end
 
+    # If canonical differs from the requested path, also mount the canonical
+    # destination so symlink targets resolve inside the sandbox.
+    if src != path && !mounted.include?(src)
+      args.concat([mode, src, src])
+      mounted << src
+    end
+
+    args
+  end
+
+  # Remove paths that are already covered by a parent path.
+  #
+  # Deduplication operates ONLY on the requested (expanded) paths.
+  # It does NOT use File.realpath or any canonical path information.
+  # This is critical because:
+  #   - System paths like /bin (canonical /usr/bin) must NOT be filtered
+  #     out just because /usr is already bound.
+  #   - Paths through symlinks (e.g. /home/user/.rbbt/var) must remain
+  #     distinct from their canonical targets (/bulk/rbbt/var).
+  helper :deduplicate_paths do |paths|
+    expanded = paths
+      .map { |p| File.expand_path(p.to_s) }
+      .select { |p| File.exist?(p) }
+      .uniq
+
+    # Sort by depth so parents come before children.
+    expanded.sort_by! { |p| p.split("/").length }
+
+    kept = []
+    expanded.each do |path|
+      next if kept.any? { |k| path == k || path.start_with?(k + "/") }
+      kept << path
+    end
     kept
   end
 
@@ -283,22 +273,42 @@ module ComputerUse
       # --- Deduplicate read and writable dirs to avoid redundant mounts ---
       deduped_read     = deduplicate_paths(read_dirs)
       deduped_writable = deduplicate_paths(writable_dirs)
-      # Remove writable paths from the read list (writable takes precedence).
-      writable_destinations = deduped_writable.map { |p| bind_destination(File.expand_path(p.to_s)) }.compact
-      deduped_read = deduped_read.reject do |p|
-        dst = bind_destination(File.expand_path(p.to_s))
-        dst && writable_destinations.any? { |wdst| dst == wdst || dst.start_with?(wdst + "/") }
+
+      # Remove read mounts shadowed by writable mounts (plain path comparison).
+      # Writable takes precedence: if a writable path covers a read path
+      # (or vice versa), the read path is removed.
+      deduped_read = deduped_read.reject do |rp|
+        deduped_writable.any? do |wp|
+          rp == wp || rp.start_with?(wp + "/") || wp.start_with?(rp + "/")
+        end
       end
+
+      # --- Track mounted destinations so add_bind_mount knows which
+      #     parts of the namespace already exist ---
+      mounted = []
 
       # --- Bind read-only directories ---
       deduped_read.each do |d|
-        add_bind_mount(bwrap_args, '--ro-bind', d)
+        add_bind_mount(bwrap_args, '--ro-bind', d, mounted)
       end
 
       # --- Bind writable directories ---
       deduped_writable.each do |d|
-        add_bind_mount(bwrap_args, '--bind', d)
+        add_bind_mount(bwrap_args, '--bind', d, mounted)
       end
+
+      # --- Debug: log the final mount list ---
+      mounts = []
+      i = 0
+      while i < bwrap_args.length
+        if ['--bind', '--ro-bind'].include?(bwrap_args[i])
+          mounts << "#{bwrap_args[i]} #{bwrap_args[i+1]} -> #{bwrap_args[i+2]}"
+          i += 3
+        else
+          i += 1
+        end
+      end
+      Log.debug "ComputerUse sandbox mounts:\n  " + mounts.join("\n  ")
 
       # Ensure we chdir into the repo root if available.
       if root_dir && !root_dir.to_s.empty?
