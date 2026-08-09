@@ -357,20 +357,20 @@ module ComputerUse
   # set of bind mounts.  Falls back to unsandboxed execution with a warning
   # when bwrap is not available.
   # ===========================================================================
-  helper :sandbox_run do |executable, argv, options = {}, writable_dirs = []|
+  helper :sandbox_run do |executable, argv, options = {}, writable_paths = []|
     bwrap = find_bwrap
 
-    bwrap_dirs       = ComputerUse.get_allowed_dirs(:bwrap_dirs)
-    bwrap_read_dirs  = ComputerUse.get_allowed_dirs(:bwrap_read_dirs)
+    bwrap_paths       = ComputerUse.get_allowed_paths(:bwrap_paths)
+    bwrap_read_paths  = ComputerUse.get_allowed_paths(:bwrap_read_paths)
 
-    writable_dirs += ComputerUse.allowed_dirs.dup
-    read_dirs      = ComputerUse.allowed_read_dirs.dup
+    writable_paths += ComputerUse.allowed_paths.dup
+    read_paths      = ComputerUse.allowed_read_paths.dup
 
-    writable_dirs += bwrap_dirs      if bwrap_dirs
-    read_dirs     += bwrap_read_dirs if bwrap_read_dirs
+    writable_paths += bwrap_paths      if bwrap_paths
+    read_paths     += bwrap_read_paths if bwrap_read_paths
 
     # Add per-call writable dirs (e.g. step files_dir) - callers may pass extras.
-    writable_dirs = Array(writable_dirs).flatten.compact.uniq
+    writable_paths = Array(writable_paths).flatten.compact.uniq
 
     # Ensure root is writable so the sandbox can access repo files.
     root_dir = nil
@@ -379,28 +379,29 @@ module ComputerUse
     rescue
     end
     if root_dir && !root_dir.to_s.empty?
-      writable_dirs << root_dir.to_s
+      root_dir = root_dir.find if Path === root_dir
+      writable_paths << root_dir.to_s
     end
 
-    writable_dirs.uniq!
-    read_dirs.uniq!
+    writable_paths.uniq!
+    read_paths.uniq!
 
     use_bwrap = bwrap && !bwrap.to_s.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
 
     if use_bwrap
-      Log.debug "ComputerUse sandbox_run read_dirs: #{read_dirs.inspect}, writable_dirs: #{writable_dirs.inspect}"
+      Log.debug "ComputerUse sandbox_run read_paths: #{read_paths.inspect}, writable_paths: #{writable_paths.inspect}"
 
       # --- Resolve the executable's real path ---
       resolved_exec = resolve_executable(executable)
 
       # --- Add runtime directories needed by the resolved executable ---
-      read_dirs.concat(runtime_dirs(resolved_exec))
+      read_paths.concat(runtime_dirs(resolved_exec))
 
       # --- Scan $PATH for known relocatable runtime layouts ---
-      read_dirs.concat(path_runtime_dirs)
+      read_paths.concat(path_runtime_dirs)
 
       # --- Plan all mounts using the mount planner ---
-      mounts = plan_mounts(read_dirs, writable_dirs)
+      mounts = plan_mounts(read_paths, writable_paths)
 
       log_mount_plan(mounts)
       validate_mount_plan(mounts)
@@ -473,7 +474,7 @@ module ComputerUse
   # ===========================================================================
   # cmd_json — build interpreter args and delegate to sandbox_run.
   # ===========================================================================
-  helper :cmd_json do |tool, cmd, options = {}, writable_dirs = []|
+  helper :cmd_json do |tool, cmd, options = {}, writable_paths = []|
     # Normalize command and stdin
     stdin_data = options[:in]
 
@@ -512,14 +513,14 @@ module ComputerUse
     args_array = Array(args_array).collect(&:to_s)
 
     # Collect writable dirs to expose inside the sandbox
-    writable_dirs = ComputerUse.get_allowed_dirs(:allowed_dirs)
+    writable_paths = ComputerUse.get_allowed_paths(:allowed_paths)
     begin
-      writable_dirs << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
+      writable_paths << self.files_dir if respond_to?(:files_dir) && self.files_dir && Open.exists?(self.files_dir)
     rescue => _e
     end
 
     # Run inside sandbox (bwrap) when available, fallback to unsandboxed
-    sandbox_run(tool, args_array, options, writable_dirs)
+    sandbox_run(tool, args_array, options, writable_paths)
   end
 
   # ===========================================================================

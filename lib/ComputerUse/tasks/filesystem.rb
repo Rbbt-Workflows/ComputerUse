@@ -2,14 +2,14 @@ module ComputerUse
 
   TMP_DIRS = Path.setup("tmp").find_all
 
-  def self.get_allowed_dirs(type)
+  def self.get_allowed_paths(type)
     type_defaults = {
-      exec_dirs: %w(/bin /usr /lib /lib64 /etc).join(":"),
-      allowed_dirs: (TMP_DIRS + %w(/tmp ~/tmp)).join(":"),
+      exec_paths: %w(/bin /usr /lib /lib64 /etc).join(":"),
+      allowed_paths: (TMP_DIRS + %w(/tmp ~/tmp)).join(":"),
       dirs: %w().join(":"),
-      read_dirs: %w().join(":"),
-      thread: Thread.current['allowed_dirs'],
-      thread_read: Thread.current['allowed_read_dirs']
+      read_paths: %w().join(":"),
+      thread: Thread.current['allowed_paths'],
+      thread_read: Thread.current['allowed_read_paths']
     }
     
     IndiferentHash.setup(type_defaults)
@@ -32,18 +32,18 @@ module ComputerUse
   @root = Dir.pwd
   singleton_class.attr_accessor :root
 
-  def self.allowed_dirs
-    dirs = get_allowed_dirs(:allowed_dirs) 
-    dirs += get_allowed_dirs(:dirs) 
-    dirs += get_allowed_dirs(:thread) 
+  def self.allowed_paths
+    dirs = get_allowed_paths(:allowed_paths) 
+    dirs += get_allowed_paths(:dirs) 
+    dirs += get_allowed_paths(:thread) 
     dirs
   end
 
-  def self.allowed_read_dirs
-    dirs = get_allowed_dirs(:allowed_read_dirs)
-    dirs += get_allowed_dirs(:exec_dirs)
-    dirs += get_allowed_dirs(:read_dirs)
-    dirs += get_allowed_dirs(:thread_read) 
+  def self.allowed_read_paths
+    dirs = get_allowed_paths(:allowed_read_paths)
+    dirs += get_allowed_paths(:exec_paths)
+    dirs += get_allowed_paths(:read_paths)
+    dirs += get_allowed_paths(:thread_read) 
     dirs
   end
 
@@ -65,12 +65,12 @@ module ComputerUse
 
   helper :normalize do |path, type=:read|
     path = '.' if path == '' || TrueClass === path
-    path = "./#{path}" unless path.start_with?('/') || path.start_with?('./')
+    path = "./#{path}" unless path.start_with?('/') || path.start_with?('./') || path.start_with?('~')
 
     begin
       inside?(ComputerUse.root, path)
     rescue 
-      ComputerUse.allowed_dirs.each do |dir|
+      ComputerUse.allowed_paths.each do |dir|
         dir = File.expand_path(dir)
         dir = Path.setup dir unless Path === dir
         begin
@@ -80,7 +80,7 @@ module ComputerUse
         end
       end
 
-      ComputerUse.allowed_read_dirs.each do |dir|
+      ComputerUse.allowed_read_paths.each do |dir|
         dir = File.expand_path(dir)
         dir = Path.setup dir unless Path === dir
         begin
@@ -91,11 +91,11 @@ module ComputerUse
       end if type.to_s == 'read'
 
       if type.to_s == 'read'
-        all_dirs = [ComputerUse.root, ComputerUse.allowed_dirs, ComputerUse.allowed_read_dirs].flatten.compact.uniq
-        raise SandboxAccessViolation, "Path #{path} not read allowed: #{all_dirs}"
+        all_paths = [ComputerUse.root, ComputerUse.allowed_paths, ComputerUse.allowed_read_paths].flatten.compact.uniq
+        raise SandboxAccessViolation, "Path #{path} not read allowed: #{all_paths}"
       else
-        all_dirs = [ComputerUse.root, ComputerUse.allowed_dirs].flatten.compact.uniq
-        raise SandboxAccessViolation, "Path #{path} not write allowed: #{allowed_dirs}"
+        all_paths = [ComputerUse.root, ComputerUse.allowed_paths].flatten.compact.uniq
+        raise SandboxAccessViolation, "Path #{path} not write allowed: #{all_paths}"
       end
     end
   end
