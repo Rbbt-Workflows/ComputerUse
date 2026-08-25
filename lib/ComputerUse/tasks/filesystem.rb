@@ -33,17 +33,17 @@ module ComputerUse
   singleton_class.attr_accessor :root
 
   def self.allowed_paths
-    dirs = get_allowed_paths(:allowed_paths) 
-    dirs += get_allowed_paths(:dirs) 
-    dirs += get_allowed_paths(:thread) 
+    dirs = ComputerUse.get_allowed_paths(:allowed_paths) 
+    dirs += ComputerUse.get_allowed_paths(:dirs) 
+    dirs += ComputerUse.get_allowed_paths(:thread) 
     dirs
   end
 
   def self.allowed_read_paths
-    dirs = get_allowed_paths(:allowed_read_paths)
-    dirs += get_allowed_paths(:exec_paths)
-    dirs += get_allowed_paths(:read_paths)
-    dirs += get_allowed_paths(:thread_read) 
+    dirs = ComputerUse.get_allowed_paths(:allowed_read_paths)
+    dirs += ComputerUse.get_allowed_paths(:exec_paths)
+    dirs += ComputerUse.get_allowed_paths(:read_paths)
+    dirs += ComputerUse.get_allowed_paths(:thread_read) 
     dirs
   end
 
@@ -92,12 +92,125 @@ module ComputerUse
 
       if type.to_s == 'read'
         all_paths = [ComputerUse.root, ComputerUse.allowed_paths, ComputerUse.allowed_read_paths].flatten.compact.uniq
-        raise SandboxAccessViolation, "Path #{path} not read allowed: #{all_paths}"
+        raise SandboxAccessViolation, "Path #{path} not read allowed. Allowed paths:\n    #{describe_allowed_paths}"
       else
         all_paths = [ComputerUse.root, ComputerUse.allowed_paths].flatten.compact.uniq
-        raise SandboxAccessViolation, "Path #{path} not write allowed: #{all_paths}"
+        raise SandboxAccessViolation, "Path #{path} not write allowed. Allowed paths:\n    #{describe_allowed_paths}"
       end
     end
+  end
+
+
+  # -------------------------------------------------------------------------
+  # Sandbox introspection. The helpers below describe the effective
+  # filesystem permissions of the workflow: which paths the Ruby-level
+  # tasks (read/write/delete/search/list_directory) accept, where those
+  # paths come from, and how they are mounted inside the bwrap sandbox
+  # used by the exec tasks (bash/ruby/python/r). They are strictly
+  # read-only.
+  # -------------------------------------------------------------------------
+
+  helper :classify_path do |path|
+    info = {path: path}
+    begin
+      info[:symlink] = File.symlink?(path)
+    rescue
+      info[:symlink] = false
+    end
+    begin
+      info[:readlink] = File.readlink(path) if info[:symlink]
+    rescue
+      info[:readlink] = nil
+    end
+    begin
+      info[:realpath] = File.realpath(path)
+    rescue Errno::ENOENT, Errno::ENOTDIR, ArgumentError
+      info[:realpath] = nil
+    end
+    info[:exists] = File.exist?(path)
+    info[:type] = if info[:symlink]
+                    'symlink'
+                  elsif File.directory?(path)
+                    'directory'
+                  elsif File.file?(path)
+                    'file'
+                  else
+                    'missing'
+                  end
+    info
+  end
+
+  # One line per allowlist entry, annotated with read/write semantics, so
+  # denial messages are self-explanatory.
+  helper :describe_allowed_paths do
+    writable = [ComputerUse.root, ComputerUse.allowed_paths].flatten.compact.uniq.collect{|p| File.expand_path(p.to_s) }
+    readable = ComputerUse.allowed_read_paths.flatten.compact.uniq.collect{|p| File.expand_path(p.to_s) }
+    lines = writable.collect{|p| "#{p} (read-write)" }
+    lines.concat((readable - writable).collect{|p| "#{p} (read-only)" })
+    (lines * "\n    ") + "\n  Run task 'sandbox_paths' for details (file/dir, symlinks, mounts)"
+  end
+
+  # Which allowlist source granted a given expanded path.
+  helper :path_origin do |path|
+    expanded = File.expand_path(path.to_s)
+    sources = {
+      root: [ComputerUse.root.to_s],
+      dirs: ComputerUse.get_allowed_paths(:dirs),
+      allowed_paths: ComputerUse.get_allowed_paths(:allowed_paths),
+      thread: ComputerUse.get_allowed_paths(:thread),
+      exec_paths: ComputerUse.get_allowed_paths(:exec_paths),
+      read_paths: ComputerUse.get_allowed_paths(:read_paths),
+      allowed_read_paths: ComputerUse.get_allowed_paths(:allowed_read_paths),
+      thread_read: ComputerUse.get_allowed_paths(:thread_read),
+      bwrap_paths: ComputerUse.get_allowed_paths(:bwrap_paths),
+      bwrap_read_paths: ComputerUse.get_allowed_paths(:bwrap_read_paths),
+    }
+    sources.each do |origin, paths|
+      next if paths.nil?
+      candidates = paths.collect do |p|
+        begin
+          File.expand_path(p.to_s)
+        rescue
+          p.to_s
+        end
+      end
+      return origin if candidates.include?(expanded)
+    end
+    nil
+  end
+
+  # Reproduce, without executing anything, the mount plan that
+  # sandbox_run builds for the exec tasks. Follows the same composition
+  # order as sandbox_run: bwrap_* lists, allowed lists, and always root
+  # as writable. Network and runtime additions are noted as limits.
+  helper :sandbox_mount_plan do
+    read_paths = ComputerUse.allowed_read_paths.dup
+    bwrap_read = ComputerUse.get_allowed_paths(:bwrap_read_paths)
+    read_paths += bwrap_read if bwrap_read && !bwrap_read.empty?
+
+    writable_paths = ComputerUse.allowed_paths.dup
+    bwrap_writable = ComputerUse.get_allowed_paths(:bwrap_paths)
+    writable_paths += bwrap_writable if bwrap_writable && !bwrap_writable.empty?
+
+    # The exec sandbox always grants write access to the workflow root.
+    root = ComputerUse.root
+    root = root.find if Path === root
+    writable_paths << root.to_s if root && !root.to_s.empty?
+
+    read_paths = read_paths.flatten.compact.uniq
+    writable_paths = writable_paths.flatten.compact.uniq
+
+    plan_mounts(read_paths, writable_paths)
+  end
+
+  helper :realized_mounts do
+    return nil unless File.readable?('/proc/mounts')
+    base = %w(/ /proc /dev /sys)
+    File.readlines('/proc/mounts').collect do |line|
+      parts = line.split(/\s+/)
+      next if base.include?(parts[1])
+      {device: parts[0], mountpoint: parts[1], filesystem: parts[2], options: parts[3]}
+    end.compact
   end
 
   desc <<-EOF
@@ -268,7 +381,49 @@ not, number of lines (if not binary), etc
 
   export_exec :list_directory, :write, :read, :file_stats
 
+  desc <<-EOF
+Return the effective sandbox filesystem permissions: which paths the
+filesystem tasks (read, write, delete, search, list_directory, file_stats)
+may access, with the origin of each entry, whether it is a file, a directory,
+or a symlink (and where it points), and how each path is mounted inside the
+bwrap sandbox used by the exec tasks (bash, ruby, python, r). Read-only
+introspection, takes no inputs.
+  EOF
+  task :sandbox_paths => :json do
+    writable = [ComputerUse.root, ComputerUse.allowed_paths].flatten.compact.uniq
+    readable = ComputerUse.allowed_read_paths.flatten.compact.uniq
+
+    classify = lambda do |paths|
+      paths.collect do |p|
+        expanded = File.expand_path(p.to_s)
+        classify_path(expanded).merge(origin: path_origin(expanded))
+      end
+    end
+
+    bwrap = begin
+              find_bwrap
+            rescue
+              nil
+            end
+
+    {
+      root: ComputerUse.root.to_s,
+      pwd: Dir.pwd,
+      home: ENV['HOME'],
+      bwrap: bwrap.nil? ? nil : bwrap.to_s,
+      note: "Two permission layers apply. Layer 1 (Ruby allowlist): read, write, delete, search, list_directory and file_stats accept paths under root, writable and readable below. Layer 2 (bwrap mounts): bash, ruby, python and r run inside a bwrap sandbox built from the same lists plus exec extras, so a path can be readable from bash yet rejected by read, or granted by the allowlist yet read-only inside bwrap. The mounts section is the bwrap plan: source is the host path bound, destination is the path inside the sandbox, mode is ro or rw, and redirect is true when the destination had to be moved to the realpath because of a symlink. realized_mounts, when present, is the current process /proc/mounts view.",
+      writable: classify.call(writable),
+      readable: classify.call(readable),
+      mounts: sandbox_mount_plan.collect do |m|
+        {source: m.source, destination: m.destination, mode: m.mode.to_s,
+         requested_path: m.requested_path, redirect: m.destination != m.requested_path}
+      end,
+      realized_mounts: realized_mounts,
+    }
+  end
+
   desc 'Return the current process working directory (PWD)'
+
   task :pwd => :string do
     Dir.pwd
   end
@@ -363,5 +518,5 @@ no need to create directories in the target, they will be created automatically
     results
   end
 
-  export_exec :list_directory, :write, :read, :file_stats, :pwd, :copy, :delete, :search
+  export_exec :list_directory, :write, :read, :file_stats, :pwd, :copy, :delete, :search, :sandbox_paths
 end

@@ -33,6 +33,8 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
 	 exec
 	 exec.test
 
+  sandbox
+  sandbox_paths
  }
  bin=bin filter="*"{
  }

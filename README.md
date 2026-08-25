@@ -44,6 +44,20 @@ A note on etiquette for AI agents: If you are going to be generating files with
 data and scripts to perform tasks or test developments, please consider writing
 them on a directory like './tmp', './results', or './sandbox'.
 
+Sandbox permissions have two layers that do not always coincide, which is a
+common source of confusion. The `read`, `write`, `delete`, `search`,
+`list_directory`, and `file_stats` tasks are checked in Ruby against an
+allowlist (the workflow root plus configured writable and readable paths), while
+`bash`, `ruby`, `python`, and `r` run inside the bwrap sandbox built from the
+same lists plus exec extras. A path can therefore be readable from `bash` but
+rejected by `read`, or granted by the allowlist yet bound read-only inside
+bwrap. Run the `sandbox_paths` task to get the exact inventory: every allowed
+read and write path, whether it is a file, a directory, or a symlink and where
+the symlink points, the realpath, the origin of the permission (root, config
+key, thread, exec defaults, TMP_DIRS), and the planned bwrap mounts with source,
+destination, ro/rw mode, and whether the destination was redirected because of a
+symlink.
+
 # Tasks
 
 ## current_time
@@ -230,6 +244,54 @@ Return current working directory
 
 Outputs
 - String with the current working directory path
+
+## sandbox_paths
+Report the effective sandbox filesystem permissions
+
+Read-only introspection, takes no inputs. Use this whenever a path is rejected,
+whenever you need to know if a location is writable, or before assuming that
+something readable in `bash` is readable with the `read` task.
+
+Outputs
+- JSON with:
+  - root, pwd, home, bwrap: context of the workflow process
+  - note: explanation of the two permission layers (Ruby allowlist for the
+    filesystem tasks vs bwrap mounts for the exec tasks)
+  - writable: array of entries, one per writable path
+  - readable: array of entries, one per readable path
+  - mounts: planned bwrap mounts
+  - realized_mounts: current process /proc/mounts view when readable
+
+Each writable/readable entry has:
+- path: the expanded path
+- symlink: boolean
+- readlink: symlink target when applicable
+- realpath: resolved path, null when missing
+- exists: boolean
+- type: directory | file | symlink | missing
+- origin: root | dirs | allowed_paths | thread | exec_paths | read_paths |
+  allowed_read_paths | thread_read
+
+Each mount entry has:
+- source: host path bound
+- destination: path inside the sandbox
+- mode: ro or rw
+- requested_path: the path that was originally requested
+- redirect: true when destination differs from requested_path, which happens
+  when the requested path is a symlink and the mount was moved to its realpath
+
+Example
+```
+ComputerUse.sandbox_paths # => {"root"=>"/bulk/mvazque2/git/workflows/ComputerUse",
+  "pwd"=>"/bulk/mvazque2/git/workflows/ComputerUse", "home"=>"/home/mvazque2",
+  "bwrap"=>"/usr/bin/bwrap",
+  "writable"=>[{"path"=>"/bulk/mvazque2/git/workflows/ComputerUse", "symlink"=>false,
+    "readlink"=>nil, "realpath"=>"/bulk/mvazque2/git/workflows/ComputerUse",
+    "exists"=>true, "type"=>"directory", "origin"=>"root"}, ...],
+  "readable"=>[{"path"=>"/bin", ..., "origin"=>"exec_paths"}, ...],
+  "mounts"=>[{"source"=>"/bin", "destination"=>"/bin", "mode"=>"ro",
+    "requested_path"=>"/bin", "redirect"=>false}, ...]}
+```
 
 ## playwright
 Run Playwright test code or file against a URL
