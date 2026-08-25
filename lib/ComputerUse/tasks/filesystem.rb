@@ -259,7 +259,7 @@ not, number of lines (if not binary), etc
     stats[:type] = file.directory? ? :directory : :file
     if ! file.directory?
       stats[:binary] = false
-      stats[:size] = File.size(file)
+      stats[:size] = Open.size(file)
       stats[:lines] = Open.read(file).split("\n").length
       stats[:mtime] = Open.mtime(file)
     end

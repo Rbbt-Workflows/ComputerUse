@@ -399,6 +399,10 @@ module ComputerUse
 
     use_bwrap = bwrap && !bwrap.to_s.empty? && bwrap.to_s != 'false' && bwrap.to_s != 'none'
 
+    use_network = config(:use_network, :sandbox, :bwrap, default: 'true') == 'true'
+    
+    read_paths << '/etc/resolv.conf' if use_network
+
     if use_bwrap
       Log.debug "ComputerUse sandbox_run read_paths: #{read_paths.inspect}, writable_paths: #{writable_paths.inspect}"
 
@@ -442,6 +446,10 @@ module ComputerUse
       mounts.each do |m|
         flag = mount_mode_flag(m.mode)
         bwrap_args.concat([flag, m.source, m.destination])
+      end
+
+      if use_network
+        bwrap_args << '--share-net'
       end
 
       # Ensure we chdir into the repo root if available.
