@@ -360,6 +360,17 @@ module ComputerUse
   helper :sandbox_run do |executable, argv, options = {}, writable_paths = []|
     bwrap = find_bwrap
 
+    timeout = options[:timeout]
+    timeout = config(:timeout, :sandbox, :ComputerUse, :computer_use, env: 'SANDBOX_TIMEOUT,TIMEOUT', default: 3600 )
+    timeout = case timeout
+              when 'false', 'FALSE', 'False', 'no', 'none', 'nil', '0'
+                nil
+              when String
+                timeout.to_i
+              else
+                timeout
+              end
+
     bwrap_paths       = ComputerUse.get_allowed_paths(:bwrap_paths)
     bwrap_read_paths  = ComputerUse.get_allowed_paths(:bwrap_read_paths)
 
@@ -445,7 +456,7 @@ module ComputerUse
       full_argv = [bwrap.to_s] + bwrap_args + [resolved_exec] + Array(argv).map(&:to_s)
 
       begin
-        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true))
+        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true, timeout: timeout))
         { stdout: io.read, stderr: io.std_err, exit_status: io.exit_status }
       rescue => e
         exception_str = e.message + "\n" + (e.backtrace * "\n")
@@ -462,11 +473,12 @@ module ComputerUse
       full_argv = [executable.to_s] + Array(argv).map(&:to_s)
 
       begin
-        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true))
+        io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true, timeout: timeout))
         { exit_status: io.exit_status, stdout: io.read, stderr: io.std_err }
       rescue => e
-        exception_str = e.message + "\n" + (e.backtrace * "\n")
-        { exit_status: -1, stdout: nil, stderr: exception_str }
+        #exception_str = e.message + "\n" + (e.backtrace * "\n")
+        exception_str = e.message
+        { exit_status: -1, stdout: nil, stderr: exception_str}
       end
     end
   end
