@@ -17,7 +17,15 @@ Notes on outputs
 - The patch task returns a structured JSON result (stdout, stderr, exit_status,
   generated_patch, used_strip, tried_strips, applied flags).
 - Exec tasks (bash/python/ruby/r) return stdout, stderr and exit status as
-  JSON.
+  JSON. When a command fails (non-zero exit) or its error stream is huge,
+  `stderr` is condensed to a root-cause-first view: the distinct error-bearing
+  lines are hoisted to the top, repeated lines are collapsed (`line  [x N]`),
+  host Ruby framework backtrace frames are dropped, giant flattened argv
+  dumps from the sandbox launcher are summarized, and long streams are cut
+  with explicit `... [N lines omitted] ...` markers. The complete, uncondensed
+  stream is preserved on disk and its path returned in the additional
+  `stderr_full` field, so nothing is lost. Successful commands with small
+  stderr are returned byte-identically to before.
 
 These tools are intended to be used to alter the files on one particular
 project while limiting access to arbitrary places in the filesystem. For that
@@ -159,7 +167,7 @@ Inputs
 - cmd (required): command string
 
 Outputs
-- JSON with stdout, stderr, exit_status
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
 
 ## python
 Run Python code or file
@@ -169,7 +177,7 @@ Inputs
 - file: Path to a Python file
 
 Outputs
-- JSON with stdout, stderr, exit_status
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
 
 ## ruby
 Run Ruby code or file
@@ -179,7 +187,7 @@ Inputs
 - file: Path to a Ruby file
 
 Outputs
-- JSON with stdout, stderr, exit_status
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
 
 ## r
 Run R code or file
@@ -189,7 +197,7 @@ Inputs
 - file: Path to an R file
 
 Outputs
-- JSON with stdout, stderr, exit_status
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
 
 ## write
 Write a file

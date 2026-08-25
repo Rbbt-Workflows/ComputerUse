@@ -1,5 +1,6 @@
 module ComputerUse
   require 'open3'
+  require 'tmpdir'
 
   # ===========================================================================
   # Mount struct — explicit representation of a single bind mount.
@@ -287,6 +288,179 @@ module ComputerUse
   end
 
   # ===========================================================================
+  # Error-stream condensing — keep failures succinct and root-cause first.
+  #
+  # Three noise sources historically drowned the real mistake in `stderr`:
+  #
+  #   1. CMD.cmd's ProcessFailed message re-serializes the ENTIRE bwrap argv
+  #      (mount list + PATH), which alone runs to several KB.
+  #   2. The Ruby-side rescue appended e.backtrace — the HOST stack
+  #      (scout-ai tool loop, persist/lock frames), not the sandbox's.
+  #   3. The program's own stderr was returned verbatim; a 5000-line flood
+  #      exceeded scout-ai's 100,000-char tool-result cap, so the WHOLE
+  #      result was dropped and the caller saw only a fingerprint.
+  #
+  # condense_stderr() rebuilds a failure stream as
+  #   <root-cause lines first> + <bounded tail> + <elision markers>
+  # collapsing repeats and dropping host framework frames.  The full,
+  # uncondensed stream is persisted and returned as `stderr_full` so no
+  # information is lost.
+  # ===========================================================================
+
+  # Does +line+ look like it carries error information?
+  helper :error_line_match? do |line|
+    return false if line.nil? || line.strip.empty?
+    return false if line =~ /\A[\t ]/ && line !~ /error|exception|fatal|fail/i
+    line =~ /
+      \berror\b|\berror:|\Aerror|
+      \bexception\b|\btraceback\b|
+      \bfatal\b|\bfailed\b|\bfailure\b|\bcannot\b|\bcan't\b|
+      \bno such file\b|\bpermission denied\b|\bnot found\b|\bexpected\b|
+      \benoent\b|\beacces\b|\besrch\b|\baborted\b|
+      \bkilled\b|\bterminated\b|\bsyntaxerror\b|\bnameerror\b|\btypeerror\b|
+      \bvalueerror\b|\bkeyerror\b|\bindexerror\b|\bsegmentation fault\b|
+      \bnot a git repository\b|\bundefined\b
+    /ix
+  end
+
+  # Strip the giant flattened bwrap argv dump from a CMD.cmd ProcessFailed
+  # message, leaving a short, useful summary instead of thousands of chars
+  # of mount flags and PATH entries.
+  helper :summarize_process_failed do |message|
+    return message unless message =~ /\AProcess \d+ failed - /
+    if (m = message.match(/\AProcess \d+ failed - (.+?) -- (.+?)( failed with error status \d+\.?)\z/m))
+      argv = m[1]
+      return message if argv.length <= 120
+      payload_summary = m[2].strip.split(/\s+/).first(14).join(' ')
+      return "Process failed - bwrap #{argv.split(/\s+/).first(2).join(' ')} ... -- #{payload_summary}#{m[3]} [full argv elided]"
+    end
+    if (m = message.match(/\AProcess \d+ failed - (.+)/m))
+      argv = m[1]
+      return message if argv.length <= 120
+      words = argv.split(/\s+/)
+      return "Process failed - bwrap #{words.first(6).join(' ')} ... #{words.last(3).join(' ')} [full argv elided]"
+    end
+    head = message[0, 120]
+    rest = message.length > 240 ? " ... [elided #{message.length - 240} chars] ... " : ''
+    tail = message[-120, 120].to_s
+    head + rest + tail
+  end
+
+  # Condense a raw stderr stream into <= max_chars chars, root cause first.
+  #
+  # When +max_chars+ is 0 (or falsy) the stream is returned untouched
+  # (explicit opt-out).
+  helper :condense_stderr do |raw, max_chars: nil|
+    max_chars ||= 4000
+    max_chars = max_chars.to_i
+    return raw.to_s if max_chars <= 0 || raw.nil?
+    raw = raw.to_s
+
+    return raw.chomp + "\n" if raw.length <= max_chars && !raw.include?('Process ')
+
+    lines = raw.lines.map(&:chomp)
+
+    # 1. Replace any giant ProcessFailed argv dump with its summary.
+    lines = lines.map do |l|
+      l =~ /\AProcess \d+ failed - / ? summarize_process_failed(l) : l
+    end
+
+    # 2. Drop host Ruby framework frames (gem internals, persist/lock,
+    #    workflow step machinery).  They describe the CALLER's stack, not
+    #    the sandbox failure.
+    framework = %r{
+      /gems/|/scout-essentials/lib|/scout-gear/lib|/scout-ai/lib|
+      /rbbt-util/lib|/scout/persist|/open/lock|/workflow/step|
+      chain_tools|process_calls|bin/scout:|`exec'\z|`cmd'\z
+    }x
+    dropped_frames = 0
+    lines = lines.reject do |l|
+      if l =~ framework && l !~ /error|failed|cannot|No such/i
+        dropped_frames += 1
+        true
+      else
+        false
+      end
+    end
+
+    # 3. Collapse runs of identical lines into "line  [x N]".
+    collapsed = []
+    lines.each do |l|
+      if collapsed.any? && collapsed.last[0] == l
+        collapsed.last[1] += 1
+      else
+        collapsed << [l, 1]
+      end
+    end
+    lines = collapsed.map { |l, n| n > 1 ? "#{l}  [x #{n}]" : l }
+
+    # 4. Under budget after cleanup?  Return as-is.
+    text = lines.join("\n")
+    if text.length <= max_chars
+      return text + (dropped_frames > 0 ? "\n[#{dropped_frames} framework backtrace frames elided]" : '')
+    end
+
+    # 5. Over budget: head = root-cause lines, tail = last lines.
+    # Scan ALL error lines but keep at most 5 DISTINCT ones, so a real
+    # error buried mid-stream (after thousands of repeated error-shaped
+    # noise lines) still surfaces.
+    error_idx = lines.each_index.select { |i| error_line_match?(lines[i]) }
+    head_lines = []
+    error_idx.each do |i|
+      l = lines[i]
+      next if head_lines.include?(l)
+      head_lines << l
+      break if head_lines.length >= 5
+    end
+    head = head_lines.empty? ? lines.first(3) : head_lines
+    tail_keep = [(max_chars / 3) / 20, 5].max
+    tail_lines = lines.last(tail_keep)
+    omitted = lines.length - head.length - tail_lines.length
+
+    parts = []
+    parts.concat(head)
+    parts << "... [#{omitted} lines omitted]" if omitted > 0
+    parts.concat(tail_lines)
+    text = parts.join("\n")
+
+    # 6. Final hard cap on pathological single-line monsters.
+    if text.length > max_chars
+      keep = max_chars / 2
+      text = text[0, keep] + "\n... [#{text.length - keep - 60} chars elided] ...\n" + text[-60, 60].to_s
+    end
+
+    text + (dropped_frames > 0 ? "\n[#{dropped_frames} framework backtrace frames elided]" : '')
+  end
+
+  # Persist +text+ for post-hoc debugging and return its path (nil on
+  # failure).  Written under the step files_dir when available, else /tmp.
+  helper :persist_full_stream do |text, label = 'stderr_full'|
+    begin
+      dir = respond_to?(:files_dir) ? files_dir : nil
+      dir = nil if dir && !Open.exists?(dir.to_s)
+      dir ||= Dir.mktmpdir
+      path = File.join(dir.to_s, "#{label}.log")
+      Open.write(path, text.to_s)
+      path
+    rescue
+      nil
+    end
+  end
+
+  # Build the failure hash for a failed exec, condensing stderr while
+  # persisting the full stream for post-hoc debugging.
+  helper :failure_result do |exit_status, stdout, stderr, prefix: nil|
+    raw = [prefix, stderr].compact.join("\n")
+    condensed = condense_stderr(raw)
+    result = { exit_status: exit_status, stdout: stdout, stderr: condensed }
+    if condensed != stderr.to_s || condensed != raw
+      path = persist_full_stream(raw)
+      result[:stderr_full] = path if path
+    end
+    result
+  end
+
+  # ===========================================================================
   # Executable resolution — resolve bare names via $PATH, then realpath.
   # ===========================================================================
   helper :resolve_executable do |exe|
@@ -465,10 +639,26 @@ module ComputerUse
 
       begin
         io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true, timeout: timeout))
-        { stdout: io.read, stderr: io.std_err, exit_status: io.exit_status }
+        out = io.read.to_s
+        err = io.std_err.to_s
+        status = io.exit_status
+        if status == 0 && err.length <= 4000
+          { stdout: out, stderr: err, exit_status: status }
+        else
+          # Failure (or oversized stream): condense, keep raw copy on disk.
+          failure_result(status, out, err)
+        end
       rescue => e
-        exception_str = e.message + "\n" + (e.backtrace * "\n")
-        { exit_status: -1, stdout: nil, stderr: exception_str }
+        # CMD.cmd re-raises with the whole flattened bwrap argv embedded
+        # in the message; failure_result() summarizes it and drops the
+        # HOST backtrace, which only describes the caller's stack.
+        begin
+          program_err = e.io ? e.io.std_err.to_s : nil
+        rescue
+          program_err = nil
+        end
+        prefix = (e.message || e.class.to_s)
+        failure_result(-1, nil, program_err || '', prefix: prefix)
       end
     else
       # Fallback: warn and run unsandboxed.
@@ -482,11 +672,22 @@ module ComputerUse
 
       begin
         io = CMD.cmd(full_argv, options.merge(save_stderr: true, pipe: false, no_fail: false, log: true, timeout: timeout))
-        { exit_status: io.exit_status, stdout: io.read, stderr: io.std_err }
+        out = io.read.to_s
+        err = io.std_err.to_s
+        status = io.exit_status
+        if status == 0 && err.length <= 4000
+          { exit_status: status, stdout: out, stderr: err }
+        else
+          failure_result(status, out, err)
+        end
       rescue => e
-        #exception_str = e.message + "\n" + (e.backtrace * "\n")
-        exception_str = e.message
-        { exit_status: -1, stdout: nil, stderr: exception_str}
+        begin
+          program_err = e.io ? e.io.std_err.to_s : nil
+        rescue
+          program_err = nil
+        end
+        prefix = (e.message || e.class.to_s)
+        failure_result(-1, nil, program_err || '', prefix: prefix)
       end
     end
   end
