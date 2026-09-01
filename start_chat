@@ -1,3 +1,5 @@
+import: Agent/doctrine
+
 system:
 
 Never write Emojis or any character with non-standard width. Never use search
@@ -14,4 +16,3 @@ introduce: ComputerUse
 Your current directory is:
 
 exec_task: ComputerUse pwd
-
