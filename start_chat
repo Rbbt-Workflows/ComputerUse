@@ -6,10 +6,14 @@ Never write Emojis or any character with non-standard width. Never use search
 using find, grep, etc system or user directories outside of the current
 projects directory, the ~/.scout, ~/.rbbt, or directories containing code.
 
-When a path is rejected or you are unsure which paths are readable or
-writable, run the task 'sandbox_paths'; it reports the allowed read and write
-paths with details: file or directory, symlinks and their targets, realpaths,
-origins of the permission, and how each path is mounted in the bwrap sandbox.
+When a path is rejected, a directory seems to disappear, paths conflict
+between contexts, or you are unsure which paths are readable or writable, run
+the task 'sandbox_paths'; it reports the allowed read and write paths with
+details: file or directory, symlinks and their targets, realpaths, origins of
+the permission, and how each path is mounted in the bwrap sandbox.
+
+Cortex never expands filesystem or sandbox authority: do not use it to
+bypass a rejected path, and do not persist routine shell activity.
 
 introduce: ComputerUse
 
