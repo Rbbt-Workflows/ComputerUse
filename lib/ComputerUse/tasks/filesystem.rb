@@ -412,7 +412,8 @@ introspection, takes no inputs.
 
     {
       root: ComputerUse.root.to_s,
-      pwd: Dir.pwd,
+      pwd: ENV['PWD'] || Dir.pwd,
+      pwd_realpath: File.realpath(Dir.pwd),
       home: ENV['HOME'],
       bwrap: bwrap.nil? ? nil : bwrap.to_s,
       note: "Two permission layers apply. Layer 1 (Ruby allowlist): read, write, delete, search, list_directory and file_stats accept paths under root, writable and readable below. Layer 2 (bwrap mounts): bash, ruby, python and r run inside a bwrap sandbox built from the same lists plus exec extras, so a path can be readable from bash yet rejected by read, or granted by the allowlist yet read-only inside bwrap. The mounts section is the bwrap plan: source is the host path bound, destination is the path inside the sandbox, mode is ro or rw, and redirect is true when the destination had to be moved to the realpath because of a symlink. realized_mounts, when present, is the current process /proc/mounts view.",
@@ -429,7 +430,7 @@ introspection, takes no inputs.
   desc 'Return the current process working directory (PWD)'
 
   task :pwd => :string do
-    Dir.pwd
+    ENV['PWD'] || Dir.pwd
   end
 
   # Delete task
