@@ -535,7 +535,7 @@ module ComputerUse
     bwrap = find_bwrap
 
     timeout = options[:timeout]
-    timeout = config(:timeout, :sandbox, :ComputerUse, :computer_use, env: 'SANDBOX_TIMEOUT,TIMEOUT', default: 3600 )
+    timeout = config(:timeout, :sandbox, :ComputerUse, :computer_use, env: 'SANDBOX_TIMEOUT,TIMEOUT', default: 3600 ) if timeout.nil?
     timeout = case timeout
               when 'false', 'FALSE', 'False', 'no', 'none', 'nil', '0'
                 nil
@@ -755,10 +755,11 @@ Returns a JSON object with two keys, stderr and stdout, pointing to the STDOUT
 and STDERR outputs as strings, and exit_status, the exit status of the process
   EOF
   input :cmd, :string, 'Bash command to run', nil, required: true
+  input :timeout, :integer, 'Timeout in seconds', nil
   extension :json
-  task 'bash' => :text do |cmd|
+  task 'bash' => :text do |cmd,timeout|
     Log.medium "Bash\n" + cmd
-    cmd_json :bash, cmd
+    cmd_json :bash, cmd, timeout: timeout
   end
 
   desc <<-EOF
@@ -770,8 +771,9 @@ stderr and exit_status.
   EOF
   input :code, :text, 'Python code to run (ignored if file provided)'
   input :file, :path, 'File to run'
+  input :timeout, :integer, 'Timeout in seconds', nil
   extension :json
-  task :python => :text do |code, file|
+  task :python => :text do |code, file,timeout|
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -799,7 +801,7 @@ stderr and exit_status.
     cmd_name ||= 'python'
 
     begin
-      cmd_json cmd_name, target
+      cmd_json cmd_name, target, timeout: timeout
     rescue => e
       raise ScoutException, e.message
     end
@@ -815,8 +817,9 @@ Returns a JSON object with keys stdout, stderr and exit_status.
   EOF
   input :code, :text, 'Ruby code to run (ignored if file provided)'
   input :file, :path, 'File to run'
+  input :timeout, :integer, 'Timeout in seconds', nil
   extension :json
-  task :ruby => :text do |code, file|
+  task :ruby => :text do |code, file,timeout|
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -829,7 +832,7 @@ Returns a JSON object with keys stdout, stderr and exit_status.
     end
 
     begin
-      cmd_json :ruby, target
+      cmd_json :ruby, target, timeout: timeout
     rescue => e
       raise ScoutException, e.message
     end
@@ -845,8 +848,9 @@ Returns a JSON object with keys stdout, stderr and exit_status.
   EOF
   input :code, :text, 'R code to run (ignored if file provided)'
   input :file, :path, 'File to run'
+  input :timeout, :integer, 'Timeout in seconds', nil
   extension :json
-  task :r => :text do |code, file|
+  task :r => :text do |code, file,timeout|
     if file && !file.to_s.empty?
       file = normalize file
       target = file
@@ -874,7 +878,7 @@ Returns a JSON object with keys stdout, stderr and exit_status.
     cmd_name ||= 'Rscript'
 
     begin
-      cmd_json cmd_name, target
+      cmd_json cmd_name, target, timeout: timeout
     rescue => e
       raise ScoutException, e.message
     end
