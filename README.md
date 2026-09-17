@@ -68,6 +68,16 @@ symlink.
 
 # Tasks
 
+## precise_edit
+Apply one exact, count-checked replace, insert, or delete mutation to a file.
+
+The task requires `path`, `operation`, exact `selector`, `replacement`, and
+`expect_matches`. An optional SHA-256 `expected_hash` protects against edits
+based on stale content. Zero or unexpected matches and hash mismatches leave
+the file unchanged. Successful edits are written through a temporary file and
+rename and return structured JSON verification details. Bulk editing and
+fuzzy/AST matching are intentionally deferred.
+
 ## current_time
 Return current time as string
 

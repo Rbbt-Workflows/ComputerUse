@@ -20,4 +20,4 @@ require_relative 'lib/ComputerUse/tasks/patch'
 require_relative 'lib/ComputerUse/tasks/documents'
 require_relative 'lib/ComputerUse/tasks/playwright'
 require_relative 'lib/ComputerUse/tasks/web'
-
+require_relative 'lib/ComputerUse/tasks/precise_edit.rb'
