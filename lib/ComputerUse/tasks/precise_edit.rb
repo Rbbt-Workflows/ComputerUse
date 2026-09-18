@@ -25,7 +25,7 @@ changed only when the selector count and optional SHA-256 precondition match.
     raise ParameterException, "File not found: #{file}" unless Open.exists?(file)
     raise ParameterException, "File is a directory: #{file}" if Open.directory?(file)
 
-    original = File.binread(file)
+    original = Open.read(file)
     actual_hash = Digest::SHA256.hexdigest(original)
     result = {
       status: 'precondition_failed', resolved_path: file, existence: true,
@@ -37,7 +37,14 @@ changed only when the selector count and optional SHA-256 precondition match.
       next result
     end
 
-    matches = original.scan(Regexp.escape(selector)).length
+    # Both selector and original are textual data.
+    # Keep them in UTF-8 so selectors containing non-ASCII characters work.
+    original = original.encode(Encoding::UTF_8) unless original.encoding == Encoding::UTF_8
+    selector = selector.encode(Encoding::UTF_8) unless selector.encoding == Encoding::UTF_8
+
+    re = Regexp.new(Regexp.escape(selector))
+    matches = original.scan(re).length
+
     result[:matches] = matches
     unless matches == expected
       result[:verification] = {changed: false, reason: 'match_count_mismatch'}
@@ -51,13 +58,8 @@ changed only when the selector count and optional SHA-256 precondition match.
               else raise ParameterException, "Unknown operation: #{operation}"
               end
 
-    Tempfile.create(['precise-edit-', '.tmp'], File.dirname(file), binmode: true) do |tmp|
-      tmp.write(updated)
-      tmp.flush
-      tmp.fsync rescue nil
-      File.chmod(File.stat(file).mode & 07777, tmp.path) rescue nil
-      File.rename(tmp.path, file)
-    end
+    Open.write(file, updated)
+
     result[:status] = 'updated'
     result[:verification] = {changed: true, hash: Digest::SHA256.hexdigest(updated),
                              bytes_before: original.bytesize, bytes_after: updated.bytesize}
