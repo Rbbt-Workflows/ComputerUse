@@ -4,16 +4,13 @@ module ComputerUse
 
   # Required: the URL the test should visit (e.g. http://localhost:3000)
   input :url, :string, 'URL to test (e.g. http://localhost:3000)', nil, required: true
-
   input :code, :text, 'Playwright test code to run (JS/TS). If provided the code will be saved to .playwright/scripts and executed', nil
   input :file, :path, 'Path to an existing Playwright test file to execute. If provided, this file is used instead of inline code', nil
-
   input :headless, :boolean, 'Run browser headlessly (default: true)', true
   input :trace, :boolean, 'Enable Playwright tracing for the run (default: false)', false
   input :video, :boolean, 'Enable video recording for tests (default: false)', false
   input :timeout, :integer, 'Per-test timeout in seconds (default: 10)', 10
   input :extra_args, :string, 'Extra arguments to pass to `playwright test` (optional)', nil
-
   extension :json
   task :playwright => :text do |url, code, file, headless, trace, video, timeout, extra_args|
     raise ParameterException, 'url is required' if url.nil? || url.to_s.strip.empty?
