@@ -346,11 +346,11 @@ Example: {files: ['foo', 'bar/bar'], directories: ['bar'], stats: {'foo' => {siz
       end
     end
 
-    if stats
+    if stats && Open.exists?(file)
       info[:stats] = {}
       info[:files].each do |file|
         info[:stats][file] = {
-          size: File.size(file),
+          size: Open.size(file),
           mtime: Open.mtime(file)
         }
 
@@ -471,6 +471,7 @@ no need to create directories in the target, they will be created automatically
     source = normalize source, :read
     target = normalize target, :write
     raise ParameterException, "Source file not found: #{source}" unless Open.exists?(source)
+    raise ParameterException, "Source file same as target file #{source}" if source == target
     raise ParameterException, "Root path cannot be deleted" if File.expand_path(file) == File.expand_path(ComputerUse.root)
 
     Open.cp source, target
