@@ -68,6 +68,87 @@ symlink.
 
 # Tasks
 
+TSV task documentation: [Working with TSV files](doc/user/TSV.md). The TSV
+suite includes `tsv_info`, `tsv_read`, `tsv_query`, `tsv_edit`, `tsv_merge`,
+`tsv_attach`, and `tsv_translate`. TSV text tasks return their normal result by
+default; callers that need the persisted job path can use the harness-level
+`return_path: true` option.
+
+## TSV task reference
+
+The TSV tasks use Scout's `TSV` abstraction. The recommended workflow for an arbitrary downloaded file is:
+
+1. Use `tsv_info` to inspect how the file opens. If its delimiter or header convention is unclear, inspect a small prefix with `read` before selecting options.
+2. Use `tsv_read` with the appropriate source parsing options to normalize it. For example, CSV input can use `sep: ","`; `header_hash: ""` means the source header does not have a leading `#` marker.
+3. Use the normalized Scout TSV with `tsv_query`, `tsv_edit`, `tsv_merge`, `tsv_attach`, or `tsv_translate`. These downstream tasks expect canonical tab-separated Scout TSV and do not provide source delimiter/header options. If a source needs a different interpretation, normalize it again through `tsv_read`.
+
+The harness may be asked to return the persisted task-result path using its `return_path` feature. `return_path` is not an input declared by any TSV task. For text tasks, the normal result is the task's text; the harness option gives access to the persisted result file instead. `tsv_edit` and metadata-changing `tsv_info` are exceptions in that they also update the input file in place. The merge, attach, translate, and read results do not modify their source files. There is no `tsv_write` task: TSVs are intended to be computational artifacts, with `tsv_edit` reserved for specific small edits.
+
+### `tsv_info`
+
+Inspect a TSV and optionally update selected metadata or representation in the source file. Returns JSON containing `key_field`, `fields`, `type`, `cast`, `namespace`, `identifiers`, `source_rows`, `unique_keys`, `entity_field_candidates`, and `registered_entity_formats`.
+
+Required input: `file`.
+
+Optional opening inputs: `key_field`, `fields`, `type`, `sep` (default tab), `sep2` (default `|`), `header_hash` (default `#`), `merge` (`true`, `false`, or `concat`), and `one2one` (default false). These control source interpretation while inspecting. `type` is an opening override; allowed types are `single`, `list`, `flat`, and `double`.
+
+Optional metadata/update inputs: `new_key_field`, `rename_fields`, `cast` (`to_i` or `to_f`), `new_type` (`single`, `list`, `flat`, or `double`), `namespace`, and `identifiers` (path to identifier metadata). Supplying any of these requests an in-place rewrite of the source; without them `tsv_info` is read-only. `new_key_field` and `rename_fields` rename table metadata; `new_type` converts the representation. Empty or omitted metadata values do not clear existing metadata. Source updates require a writable regular non-symlink file and writable parent directory, and use an atomic same-directory replacement. Invalid options or an unsafe source raise `ParameterException` without replacing the source.
+
+`entity_field_candidates` lists fields whose names are registered in `Entity.formats`; it is a name-based candidate list, not proof that every cell contains valid entity identifiers. The reported row/key counts describe the table materialized by the chosen opening options, so duplicate-key merging affects the counts.
+
+### `tsv_read`
+
+Read a source table and return normalized Scout TSV text. Required input: `file`.
+
+Opening inputs include `keys` (exact keys to retain; empty means all), `key_field`, `fields`, `type` (default `double`), `sep` (default tab), `sep2` (default `|`), `header_hash` (default `#`; set to an empty string if no marker precedes the header), `cast`, `select`, `grep`, `merge` (default true; also accepts false or concat), `one2one`, `field`, `identifiers`, `namespace`, and `persist` (default false). These are applied while interpreting the source. A comma separator uses CSV loading; the output is still Scout TSV. `persist: true` uses HDB persistence under the task's own `.files` area rather than an arbitrary caller-supplied path.
+
+Output metadata can additionally be set with `new_key_field` and `rename_fields`. The result uses canonical tab-separated columns, pipe-separated multi-values, and `#`-marked headers/preamble, ready for downstream TSV tasks. Requested `keys` are retained only when found and emitted in deterministic sorted order. `select` and `grep` are Scout TSV filters. Cast values are restricted to `to_i` or `to_f`; consult `tsv_info` or read a small result when deciding whether a cast is appropriate.
+
+Example: normalize a CSV with a plain header, then query the normalized result:
+
+```ruby
+normalized = ComputerUse.job(:tsv_read, nil,
+  file: "download.csv", sep: ",", header_hash: "", type: "double").run
+File.write("prepared.tsv", normalized)
+answer = ComputerUse.job(:tsv_query, nil,
+  file: "prepared.tsv", keys: ["A123"]).run
+```
+
+### `tsv_query`
+
+Fetch exact key values from a prepared Scout TSV. Required inputs: `file` and `keys` (array of key strings). Returns a JSON object with table `key_field`, `fields`, `type`, selected `column`, `queries` in request order, and `missing_keys`. Each query entry has `key`, `found`, and `value`; missing keys retain their request position and have a null value.
+
+Optional inputs are `key_field`, `fields`, `type`, `cast` (`to_i` or `to_f`), `column`, `merge`, `one2one`, and Scout's convenience `field`. `column: "key"` selects the queried key itself; otherwise `column` must name a value field. `field` and `column` cannot be used together. Cast applies recursively to returned values, whether or not a column is selected. Named-column queries on flat TSVs are rejected because flat rows do not provide named field boundaries. Unknown fields and invalid casts raise `ParameterException`.
+
+### `tsv_edit`
+
+Edit one existing key in place and return the updated Scout TSV text. Required inputs: `file` and `key`. Specify exactly one edit form:
+
+- Field edit: `field` plus `value`. Named-field edits are supported for `single`, `list`, and `double` tables; `flat` does not support named-field editing. For a double-valued field, the replacement string is split on `|` into its values.
+- Whole-row edit: `row` is a JSON string whose shape must match the TSV type. A `single` row is a scalar; a `list` row is an array with one scalar per field; a `double` row is an array of value-arrays, one per field; a `flat` row is an array of scalars. JSON row values must be scalars (or arrays in the double shape), and row lengths are checked against the table metadata.
+
+Optional `type` overrides the declared type for parsing. The key and named field must exist. The source must be a writable regular non-symlink file. Changes are validated before an atomic same-directory rewrite; invalid edits leave the source unchanged. The task does not create an alternate edited source: use the harness result path only to inspect or retain the task's returned output.
+
+### `tsv_merge`
+
+Merge two prepared TSV files and return the new Scout TSV text; inputs are not modified. Required inputs: `left` and `right`. Optional `strategy` is `replace` (default) or `zip`.
+
+Both tables must have identical `key_field`, `fields`, `type`, and compatible annotation metadata (`namespace`, `identifiers`, `serializer`, and `entity_options`). With `replace`, right-side rows replace the entire row for any key present on the right, while left-only keys remain. With `zip`, values are combined using Scout's `zip_new` behavior; this is supported only for `double` tables. Incompatible tables and unknown strategies raise `ParameterException`.
+
+### `tsv_attach`
+
+Attach selected fields from a right-hand prepared TSV to a source table on an exact key/field match, returning new Scout TSV text without modifying either input. Required inputs: `source`, `other`, `match_key` (source key or field), and `other_key` (right key or field). Optional `fields` selects right-side fields; by default, all right value fields except the matching field are attached. `one2one` defaults to true.
+
+Flat TSVs are unsupported. A right-side value-field match requires a list or double right table. Requested fields must be existing right value fields and must not collide with source fields. Repeated right-side match values are rejected. The attach is incomplete (`complete: false`): source rows without a match remain, with empty attached values. Scout `TSV.attach` is applied to a copy because it mutates its source table.
+
+### `tsv_translate`
+
+Translate a key or value field using a prepared TSV and an explicit identifier mapping; return a new Scout TSV text without modifying the source. Required inputs: `file`, `field`, `target_format`, and `identifiers` (mapping TSV path). Optional inputs: `type`, `key_field`, `fields`, and `one2one` (default false). Uses Scout `TSV.translate`; the requested field and target format must be interpretable by the mapping. Mapping and source files are expected to be in canonical Scout TSV form.
+
+### Shared TSV behavior and safety
+
+All TSV tasks validate source paths as files. `tsv_edit` and metadata-changing `tsv_info` additionally reject symlinks and non-writable source/directory paths before replacement. The tasks use Scout TSV parsing, metadata, conversion, and merge/attach/translation behavior rather than treating TSV rows as untyped strings. Where Scout rejects an incompatible type or row shape, the task reports a controlled `ParameterException`. Use `tsv_info` to inspect shape, `read` to inspect source text when parsing is unclear, and `tsv_read` to make a deliberate normalized variant before downstream operations.
+
 ## precise_edit
 Apply one exact, count-checked replace, insert, or delete mutation to a file.
 

@@ -32,7 +32,8 @@ changed only when the selector count and optional SHA-256 precondition match.
       matches: 0, precondition: {expected_matches: expected, expected_hash: expected_hash,
                                   actual_hash: actual_hash}, verification: {}
     }
-    if expected_hash && expected_hash != actual_hash
+
+    if expected_hash && expected_hash != actual_hash && ! expected_hash.empty?
       result[:verification] = {changed: false, reason: 'hash_mismatch'}
       next result
     end

@@ -35,6 +35,11 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
 
   sandbox
   sandbox_paths
+
+  patch
+
+  tsv
+
  }
  bin=bin filter="*"{
  }
@@ -42,12 +47,19 @@ ComputerUse=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sas
   ComputerUse=ComputerUse{
    exceptions.rb
    tasks=tasks{
-    filesystem.rb
     documents.rb
-    web.rb
-    patch.rb
     exec.rb
+    filesystem.rb
+    patch.rb
     playwright.rb
+    precise_edit.rb
+    tsv.rb
+    tsv_attach.rb
+    tsv_edit.rb
+    tsv_merge.rb
+    tsv_process.rb
+    tsv_read.rb
+    web.rb
    }
   }
  }
