@@ -67,12 +67,45 @@ destination, ro/rw mode, and whether the destination was redirected because of a
 symlink.
 
 # Tasks
+# Tasks
 
-TSV task documentation: [Working with TSV files](doc/user/TSV.md). The TSV
-suite includes `tsv_info`, `tsv_read`, `tsv_query`, `tsv_edit`, `tsv_merge`,
-`tsv_attach`, and `tsv_translate`. TSV text tasks return their normal result by
-default; callers that need the persisted job path can use the harness-level
-`return_path: true` option.
+## kb_register
+Register an association database in a Scout KnowledgeBase.
+
+`kb_register` stores a TSV-backed association database in Scout's KnowledgeBase registry using `KnowledgeBase#register` and `KnowledgeBase#save`. The source TSV must already be in the shape Scout expects for an association database; use the TSV tasks to inspect and normalize downloaded data first.
+
+Required inputs:
+
+- `name`: simple database name (letters, digits, `.`, `_`, and `-`; no path separators).
+- `source_file`: association TSV path, readable under the ComputerUse sandbox policy.
+- `source` and `target`: association key-field specifications used by Scout (these may use Scout's supported entity/field syntax).
+
+Optional inputs:
+
+- `knowledge_base`: `current` (default) or `:default` registers in Scout's default KnowledgeBase; a workflow name registers in that workflow's configured KnowledgeBase; an explicit path registers in a KnowledgeBase directory at that location. The resolved directory must be writable under ComputerUse's write allowlist. Workflow KnowledgeBases are created under that workflow's library directory if absent.
+- `fields`: association information fields to retain.
+- `undirected`: mark association as undirected; omit it to let Scout infer directionality from its database format.
+- `identifiers`: readable identifier-mapping TSV path.
+- `namespace`: namespace metadata for the database/KnowledgeBase.
+- `description`: human-readable database description.
+
+The task validates the database name, source file, required source/target specifications, and destination write permissions before changing the registry. It returns JSON describing the KnowledgeBase location, registered database name, source file, options, and available database names. It registers metadata and the TSV path; it does not copy or rewrite the source TSV. Use `return_path` only as a harness option where applicable; it is not a `kb_register` input.
+
+Example:
+
+```json
+{
+  "name": "tf_targets",
+  "source_file": "./data/tf_targets.tsv",
+  "source": "TF",
+  "target": "Target",
+  "knowledge_base": "current",
+  "fields": ["Evidence", "PMID"],
+  "description": "Transcription-factor target associations"
+}
+```
+
+This uses the same underlying concepts as Scout's `scout kb register`: association registrations include the source and target specifications, optional fields and directionality, identifiers, namespace, and description. The registry is persisted in the selected KnowledgeBase's `config` files. Registration does not itself validate every row's semantic compatibility; query/open the database through Scout to verify its usable association index.
 
 ## TSV task reference
 
