@@ -34,7 +34,7 @@ class TestComputerUseTSV < Test::Unit::TestCase
 
   def test_task_surface_is_consolidated_and_harness_owns_return_path
     names = ComputerUse.tasks.keys.grep(/\Atsv_/).map(&:to_sym).sort
-    assert_equal %i[tsv_attach tsv_edit tsv_info tsv_merge tsv_query tsv_read tsv_translate], names
+    assert_equal %i[tsv_attach tsv_edit tsv_info tsv_merge tsv_query tsv_read tsv_sort tsv_translate], names
     names.each do |name|
       inputs = ComputerUse.tasks[name].inputs.map { |input| input.respond_to?(:name) ? input.name : input }
       assert_not_include inputs, :return_path, "#{name} must not declare the harness option as a task input"
@@ -304,6 +304,51 @@ class TestComputerUseTSV < Test::Unit::TestCase
       assert_equal [%w[TP53], %w[1]], attached['A']
       assert_equal [%w[BRCA1], []], attached['B']
       assert_equal before, File.binread(source)
+    end
+  end
+
+
+  def test_sort_by_numeric_field_pages_and_returns_keys_or_tsv
+    with_tsv("#: :type=:double\n#ID\tScore\tGene\nA\t10\tAlpha\nB\t2\tBeta\nC\t30\tGamma\n") do |file, _dir|
+      keys = read_job(:tsv_sort, file, column: 'Score', cast: 'to_i', page: 1, page_size: 2, just_keys: true).run
+      assert_equal %w[B A], keys[:keys]
+      assert_equal 3, keys[:total_keys]
+
+      floats = read_job(:tsv_sort, file, column: 'Score', cast: 'to_f', page: 1, page_size: 2, just_keys: true).run
+      assert_equal %w[B A], floats[:keys]
+
+      page = read_job(:tsv_sort, file, column: 'Score', cast: 'to_i', direction: 'descending', page: 2, page_size: 2).run
+      table = TSV.open(StringIO.new(page[:tsv]), persist: false)
+      assert_equal ['B'], table.keys
+      assert_equal %w[Score Gene], table.fields
+      assert_equal ['2'], table['B'][0]
+
+      all_keys = read_job(:tsv_sort, file, column: 'key', just_keys: true).run
+      assert_equal %w[A B C], all_keys[:keys]
+    end
+  end
+
+  def test_sort_validates_column_cast_direction_and_pagination
+    with_tsv("#: :type=:single\n#ID\tScore\nA\t12\n") do |file, _dir|
+      assert_raise(ParameterException) { read_job(:tsv_sort, file, column: 'Other').run }
+      assert_raise(ParameterException) { read_job(:tsv_sort, file, cast: 'to_s').run }
+      assert_raise(ParameterException) { read_job(:tsv_sort, file, direction: 'sideways').run }
+      assert_raise(ParameterException) { read_job(:tsv_sort, file, page: 0).run }
+      assert_raise(ParameterException) { read_job(:tsv_sort, file, page_size: 0).run }
+      empty_page = read_job(:tsv_sort, file, page: 3, page_size: 1, just_keys: true).run
+      assert_equal [], empty_page[:keys]
+    end
+  end
+
+  def test_sort_float_cast_and_full_tsv_preserve_sorted_key_order
+    with_tsv("#: :type=:double\n#ID\tScore\tTags\nA\t10.1\ta|b\nB\t2.2\tc\nC\t1.5\td\n") do |file, _dir|
+      keys = read_job(:tsv_sort, file, column: 'Score', cast: 'to_f', just_keys: true).run
+      assert_equal %w[C B A], keys[:keys]
+
+      page = read_job(:tsv_sort, file, column: 'Score', cast: 'to_f').run
+      table = TSV.open(StringIO.new(page[:tsv]), persist: false)
+      assert_equal %w[C B A], table.keys
+      assert_equal ['d'], table['C'][1]
     end
   end
 

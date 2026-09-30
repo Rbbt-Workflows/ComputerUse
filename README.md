@@ -178,6 +178,12 @@ Flat TSVs are unsupported. A right-side value-field match requires a list or dou
 
 Translate a key or value field using a prepared TSV and an explicit identifier mapping; return a new Scout TSV text without modifying the source. Required inputs: `file`, `field`, `target_format`, and `identifiers` (mapping TSV path). Optional inputs: `type`, `key_field`, `fields`, and `one2one` (default false). Uses Scout `TSV.translate`; the requested field and target format must be interpretable by the mapping. Mapping and source files are expected to be in canonical Scout TSV form.
 
+### `tsv_sort`
+
+Sort a prepared Scout TSV with Scout's `TSV#page` implementation. Required input: `file`. Optional inputs are `column` (value field or `key`, default `key`), `direction` (`ascending` or `descending`), `page` (1-based, default 1), `page_size` (positive row count; omitted means all keys), `cast` (`to_i` or `to_f` for numeric value-field sorting), and `just_keys` (default false).
+
+When `just_keys` is false, the JSON result includes the selected page as canonical Scout TSV text in `tsv`, together with the selected column, direction, page number, effective page size and total key count. When true, `keys` contains the page's ordered keys instead. The full TSV preserves this sorted key order (rather than the receiver's original order). Sorting by a value field uses its first value for list/double rows, following Scout's `TSV#page`/`sort_by` behavior; `cast` changes that comparison value to integer or float, with Ruby's `to_i`/`to_f` conversion semantics. Sorting by `key` orders on the key and ignores `cast`. Unknown fields, invalid casts/directions and non-positive page numbers or sizes are rejected; a page beyond the available rows returns an empty page. Value-field sorting on flat TSVs is unsupported.
+
 ### Shared TSV behavior and safety
 
 All TSV tasks validate source paths as files. `tsv_edit` and metadata-changing `tsv_info` additionally reject symlinks and non-writable source/directory paths before replacement. The tasks use Scout TSV parsing, metadata, conversion, and merge/attach/translation behavior rather than treating TSV rows as untyped strings. Where Scout rejects an incompatible type or row shape, the task reports a controlled `ParameterException`. Use `tsv_info` to inspect shape, `read` to inspect source text when parsing is unclear, and `tsv_read` to make a deliberate normalized variant before downstream operations.

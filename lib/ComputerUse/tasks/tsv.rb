@@ -455,6 +455,57 @@ module ComputerUse
     TSVTasks.canonical_render(translated)
   end
   export :tsv_translate
+
+  desc 'Sort a TSV by key or field and return one page as TSV or sorted keys.'
+  input :file, :path, 'Prepared Scout TSV file', nil, required: true
+  input :column, :string, 'Key or value field to sort by (default: key)', 'key'
+  input :direction, :select, 'Sort direction', 'ascending', select_options: %w[ascending descending]
+  input :page, :integer, '1-based page number', 1
+  input :page_size, :integer, 'Rows per page; omitted means all rows', nil
+  input :cast, :select, 'Cast sort values numerically', nil, select_options: %w[to_i to_f]
+  input :just_keys, :boolean, 'Return only sorted keys instead of a TSV page', false
+  task tsv_sort: :json do |file, column, direction, page, page_size, cast, just_keys|
+    TSVTasks.file!(file)
+    raise ParameterException, 'direction must be ascending or descending' unless %w[ascending descending].include?(direction.to_s)
+    raise ParameterException, 'page must be a positive integer' unless page.to_i.positive?
+    raise ParameterException, 'page_size must be a positive integer' unless TSVTasks.optional(page_size) || page_size.to_i.positive?
+    TSVTasks.cast!(cast)
+
+    table = TSV.open(file, sep: "\t", sep2: '|', header_hash: '#', persist: false)
+    selected = column.to_s
+    sort_field = if selected.empty? || selected == 'key'
+                   :key
+                 else
+                   index = Array(table.fields).map(&:to_s).index(selected)
+                   raise ParameterException, "Unknown TSV sort column: #{selected}" if index.nil?
+                   selected
+                 end
+    raise ParameterException, 'Sorting by named columns is unsupported for flat TSVs' if sort_field != :key && table.type.to_sym == :flat
+
+    sorter = if !TSVTasks.optional(cast) && sort_field != :key
+               proc do |_key, value|
+                 # TSV#sort_by supplies the selected cell, which may be nested
+                 # or multi-valued for list/double rows. Match TSV's ordinary
+                 # field sort semantics by comparing the first value only.
+                 value = value.first while value.is_a?(Array)
+                 value.nil? ? 0 : value.public_send(cast.to_sym)
+               end
+             end
+    per_page = TSVTasks.optional(page_size) ? table.keys.length : page_size.to_i
+    page_keys = table.page(page.to_i, per_page, sort_field, true, direction.to_s == 'descending', &sorter) || []
+    if just_keys
+      {column: selected.empty? ? 'key' : selected, direction: direction.to_s,
+       page: page.to_i, page_size: per_page, total_keys: table.keys.length, keys: page_keys}
+    else
+      result = TSV.setup({}, table.annotation_hash.reject { |name, _| name.to_sym == :filename })
+      page_keys.each { |key| result[key] = TSVTasks.copy(table[key]) }
+      {column: selected.empty? ? 'key' : selected, direction: direction.to_s,
+       page: page.to_i, page_size: per_page, total_keys: table.keys.length,
+       tsv: TSVTasks.canonical_render(result)}
+    end
+  end
+  export :tsv_sort
+
 end
 
-ComputerUse.export :tsv_info, :tsv_read, :tsv_query, :tsv_edit, :tsv_merge, :tsv_attach, :tsv_translate
+ComputerUse.export :tsv_info, :tsv_read, :tsv_query, :tsv_edit, :tsv_merge, :tsv_attach, :tsv_translate, :tsv_sort
