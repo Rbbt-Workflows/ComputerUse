@@ -1,3 +1,7 @@
+> DEPRECATED — see [ComputerUse/README.md](../../../README.md); content
+> preserved verbatim below (relocation pointer fixes only, recorded in
+> doc_redesign/consolidation/computeruse_deprecation.md).
+
 # Working with TSV files in ComputerUse
 
 ComputerUse provides a small suite for inspecting, reading, querying, editing,

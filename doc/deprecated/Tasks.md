@@ -1,0 +1,467 @@
+> DEPRECATED — see [ComputerUse/README.md](../../../README.md); content
+> preserved verbatim below (relocation pointer fixes only, recorded in
+> doc_redesign/consolidation/computeruse_deprecation.md).
+
+# Tasks
+
+## kb_register
+Register an association database in a Scout KnowledgeBase.
+
+`kb_register` stores a TSV-backed association database in Scout's KnowledgeBase registry using `KnowledgeBase#register` and `KnowledgeBase#save`. The source TSV must already be in the shape Scout expects for an association database; use the TSV tasks to inspect and normalize downloaded data first.
+
+Required inputs:
+
+- `name`: simple database name (letters, digits, `.`, `_`, and `-`; no path separators).
+- `source_file`: association TSV path, readable under the ComputerUse sandbox policy.
+- `source` and `target`: association key-field specifications used by Scout (these may use Scout's supported entity/field syntax).
+
+Optional inputs:
+
+- `knowledge_base`: `current` (default) or `:default` registers in Scout's default KnowledgeBase; a workflow name registers in that workflow's configured KnowledgeBase; an explicit path registers in a KnowledgeBase directory at that location. The resolved directory must be writable under ComputerUse's write allowlist. Workflow KnowledgeBases are created under that workflow's library directory if absent.
+- `fields`: association information fields to retain.
+- `undirected`: mark association as undirected; omit it to let Scout infer directionality from its database format.
+- `identifiers`: readable identifier-mapping TSV path.
+- `namespace`: namespace metadata for the database/KnowledgeBase.
+- `description`: human-readable database description.
+
+The task validates the database name, source file, required source/target specifications, and destination write permissions before changing the registry. It returns JSON describing the KnowledgeBase location, registered database name, source file, options, and available database names. It registers metadata and the TSV path; it does not copy or rewrite the source TSV. Use `return_path` only as a harness option where applicable; it is not a `kb_register` input.
+
+Example:
+
+```json
+{
+  "name": "tf_targets",
+  "source_file": "./data/tf_targets.tsv",
+  "source": "TF",
+  "target": "Target",
+  "knowledge_base": "current",
+  "fields": ["Evidence", "PMID"],
+  "description": "Transcription-factor target associations"
+}
+```
+
+This uses the same underlying concepts as Scout's `scout kb register`: association registrations include the source and target specifications, optional fields and directionality, identifiers, namespace, and description. The registry is persisted in the selected KnowledgeBase's `config` files. Registration does not itself validate every row's semantic compatibility; query/open the database through Scout to verify its usable association index.
+
+## searxng
+Web search using a SearXNG instance (self-hosted). Uses SEARXNG_URL or searxng_url.
+
+## docx2md
+Convert a DOCX file to Markdown using Pandoc.
+
+Required input: `docx`, the path to an existing DOCX file (a missing file raises `ParameterException`). The task runs Pandoc on the file and the converted Markdown is the task's text result; a converter failure raises `ScoutException` with its stderr. Pandoc must be installed and available to the workflow.
+
+This task is also registered on Reader.
+
+## pdf2md_full
+Convert a PDF file to Markdown using docling
+
+Runs docling on the provided PDF and writes the produced Markdown in the task files directory. The first generated file is moved to the task temporary path so it is the step's primary file.
+
+Inputs
+- pdf (required): path to the PDF file
+
+Outputs
+- A :md file written under the step area
+
+Notes
+- Requires docling in PATH.
+
+## pdf2md_no_images
+Convert a PDF to Markdown and remove image lines
+
+Depends on pdf2md_full and strips lines that start with "![Image]".
+
+Notes
+- This task is aliased as pdf2md.
+
+## pdf2md
+Alias to pdf2md_no_images
+
+Use pdf2md when you want the image-stripped Markdown output.
+
+## html2md
+Convert HTML (or an HTML URL) to Markdown using html2markdown
+
+Inputs
+- html (required): either an HTML string or a remote URL
+
+Outputs
+- Markdown text produced by html2markdown
+
+Notes
+- For a URL, content is fetched via Open.open before conversion.
+
+## excerpts
+Split Markdown text into chunks (paragraphs/sentences/sliding windows)
+
+Inputs
+- text (required): Markdown text (or a Step pointing to markdown)
+- strategy: paragraph | sentences | sliding (default: paragraph)
+- chunk_words: integer (default: 50)
+- overlap: integer (default: 10)
+
+Behavior
+- Splits the text and writes each excerpt to a file; returns ids array.
+
+## rag
+Create a RAG (retrieval-augmented generation) index from excerpts
+
+Inputs
+- embed_model: embedding model id (default: 'mxbai-embed-large')
+
+Behavior
+- Embeds excerpts via LLM.embed and saves an LLM::RAG index under tmp path.
+
+## query
+Search the RAG index for text matches
+
+Inputs
+- prompt (required): Text to match
+- num: Number of matches (default: 3)
+
+Outputs
+- JSON array with best-matching excerpt texts.
+
+## pdf_query
+Query PDF-derived excerpts
+
+Alias task that runs query with pdf2md as the text source.
+
+## html_query
+Query HTML-derived excerpts
+
+Alias task that runs query with html2md as the text source.
+
+## bash
+Run a bash command
+
+Execute an arbitrary bash command in a sandbox when available.
+
+Inputs
+- cmd (required): command string
+
+Outputs
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
+
+## python
+Run Python code or file
+
+Inputs
+- code: Python code to run (ignored if file provided)
+- file: Path to a Python file
+
+Outputs
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
+
+## ruby
+Run Ruby code or file
+
+Inputs
+- code: Ruby code to run (ignored if file provided)
+- file: Path to a Ruby file
+
+Outputs
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
+
+## r
+Run R code or file
+
+Inputs
+- code: R code to run (ignored if file provided)
+- file: Path to an R file
+
+Outputs
+- JSON with stdout, stderr, exit_status (stderr condensed on failure, full stream at stderr_full when truncated)
+
+## write
+Write a file
+
+Write content to a file under the workflow root. Paths are validated so targets must be under ComputerUse.root.
+
+There is no need to check for the presence of directories, if the directory
+structure that will hold the file does not exist it will be created.
+
+Inputs
+- path (required): path under ComputerUse.root
+- content (required): text to write
+
+Outputs
+- A short success message
+
+## read
+Read a file (head/tail or full)
+
+Inputs
+- path (required): Path to the file
+- limit: Max number of lines to return
+- chars: Max number of chars to return
+- file_end: head | tail (default: head)
+- start: Line offset (default: 0)
+
+Outputs
+- The requested file contents
+
+## list_directory
+List files and directories
+
+Inputs
+- directory (required): path under ComputerUse.root. Regular expression not allowed.
+- recursive: boolean (default: true)
+- stats: boolean (default: false)
+
+Outputs
+- JSON with files, directories (and optional stats)
+
+## file_stats
+Return basic stats about a file
+
+Inputs
+- file (required): path under ComputerUse.root
+
+Outputs
+- JSON with basic stats (type, size, lines, mtime)
+
+## pwd
+Return current working directory
+
+Outputs
+- String with the current working directory path
+
+## copy
+Copy a file or directory. The target path must be relative to the
+`ComputerUse.root` directory.
+
+If the source is a directory it is copied recursively. There is
+no need to create directories in the target, they will be created automatically
+
+## delete
+Delete a file or directory. The path must be relative to the
+`ComputerUse.root` directory, and deletion is performed with the same
+path sanity checks as the read/write tasks.
+
+If the target is a directory it is removed recursively.
+
+## search
+Search for files within a directory whose content matches a query string.
+
+  Parameters:
+  * **path** – Directory to start searching from.
+  * **query** – String to look for in file contents. Only plain‑text files
+    are considered; binary files are skipped.
+  * **max_results** – Maximum number of matches to return. If not supplied, all
+    matches will be returned.
+
+  The task returns a JSON array of relative file paths (relative to
+  ComputerUse.root). If no files match, an empty array is returned.
+
+## sandbox_paths
+Report the effective sandbox filesystem permissions
+
+Read-only introspection, takes no inputs. Use this whenever a path is rejected,
+whenever you need to know if a location is writable, or before assuming that
+something readable in `bash` is readable with the `read` task.
+
+Outputs
+- JSON with:
+  - root, pwd, home, bwrap: context of the workflow process
+  - note: explanation of the two permission layers (Ruby allowlist for the
+    filesystem tasks vs bwrap mounts for the exec tasks)
+  - writable: array of entries, one per writable path
+  - readable: array of entries, one per readable path
+  - mounts: planned bwrap mounts
+  - realized_mounts: current process /proc/mounts view when readable
+
+Each writable/readable entry has:
+- path: the expanded path
+- symlink: boolean
+- readlink: symlink target when applicable
+- realpath: resolved path, null when missing
+- exists: boolean
+- type: directory | file | symlink | missing
+- origin: root | dirs | allowed_paths | thread | exec_paths | read_paths |
+  allowed_read_paths | thread_read
+
+Each mount entry has:
+- source: host path bound
+- destination: path inside the sandbox
+- mode: ro or rw
+- requested_path: the path that was originally requested
+- redirect: true when destination differs from requested_path, which happens
+  when the requested path is a symlink and the mount was moved to its realpath
+
+Example
+```
+ComputerUse.sandbox_paths # => {"root"=>"/bulk/mvazque2/git/workflows/ComputerUse",
+  "pwd"=>"/bulk/mvazque2/git/workflows/ComputerUse", "home"=>"/home/mvazque2",
+  "bwrap"=>"/usr/bin/bwrap",
+  "writable"=>[{"path"=>"/bulk/mvazque2/git/workflows/ComputerUse", "symlink"=>false,
+    "readlink"=>nil, "realpath"=>"/bulk/mvazque2/git/workflows/ComputerUse",
+    "exists"=>true, "type"=>"directory", "origin"=>"root"}, ...],
+  "readable"=>[{"path"=>"/bin", ..., "origin"=>"exec_paths"}, ...],
+  "mounts"=>[{"source"=>"/bin", "destination"=>"/bin", "mode"=>"ro",
+    "requested_path"=>"/bin", "redirect"=>false}, ...]}
+```
+
+## playwright
+Run Playwright test code or file against a URL
+
+Accepts inline Playwright test code (JS/TS) or a path to an existing test file and runs it using npx playwright test inside the workflow sandbox. Reports and artifacts are written to:
+- .playwright/scripts (generated test files)
+- .playwright/runs (json report, html report, traces, videos)
+
+Outputs
+- JSON with stdout, stderr, exit_status and artifact paths
+
+## patch
+Apply a patch to repository files with auto-detected strip, canonical ChatGPT conversion, and optional direct-apply fallback
+
+This task accepts textual patch content and applies it using the system patch utility from the repository root. It is designed for AI agents that produce ChatGPT-style patch blocks and handles them robustly:
+- Converts ChatGPT markers (*** Begin/End Patch; *** Update/Add/Delete File: path) into a canonical unified diff with a/ and b/ headers
+- Synthesizes @@ headers when missing and ensures a trailing newline
+- Auto-detects the correct -p (strip) level by trying -p0..-p4 with --dry-run (when strip is not provided)
+- Returns structured diagnostics including the generated patch text and all tried -p attempts
+- Optional apply_direct fallback that writes full-content updates/additions directly if patch cannot be applied (with backups)
+
+Important usage guidance
+- Patches are hard to write correctly, for large changes that change most of the file consider using `write` with the new version instead of using patch
+- Use patch ONLY for updating existing files. Do NOT use patch to add or delete files.
+  - To add a file, use the write task.
+  - To delete a file, use the delete task.
+- Use dry-run after a few errors to confirm applicability and inspect diagnostics.
+- Input formats supported:
+  - ChatGPT-style blocks (recommended for agents):
+    *** Begin Patch
+    *** Update File: path/relative/to/root.ext
+    <either a canonical unified diff hunk, or the full new file content>
+    *** End Patch
+  - Canonical unified diff (--- a/... +++ b/...) with @@ hunks
+- Paths must be repo-root relative (no leading ./ or ../). Absolute paths are rejected or normalized.
+- Ensure the patch text ends with a trailing newline.
+
+CLI quick start (using scout)
+- Dry run an update patch via stdin (note: only for updates, not adds/deletes):
+  echo "*** Begin Patch
+  *** Update File: tmp/patch_demo.txt
+  -old
+  +new
+  *** End Patch" \
+  | scout workflow task --exec --nocolor ComputerUse patch --patch - --dry_run
+
+- Apply after a successful dry-run:
+  echo "*** Begin Patch
+  *** Update File: tmp/patch_demo.txt
+  -old
+  +new
+  *** End Patch" \
+  | scout workflow task --exec --nocolor ComputerUse patch --patch -
+
+Diagnostics returned
+- stdout, stderr, exit_status: raw outputs from the patch utility
+- generated_patch: canonical diff the tool produced from your input
+- used_strip: the -pN selected by auto-detection, or null if none worked
+- tried_strips: array of {strip, stdout, stderr, exit_status} trials
+- applied: whether the patch was applied (false on dry_run)
+- applied_directly: whether direct-write fallback was used (see caution below)
+- suggestion: human-readable guidance
+
+Common pitfalls and fixes
+- Patch content contains code fences (``` ... ```): strip fences before submission.
+- Missing diff headers: use ChatGPT-style Update File block or a canonical unified diff.
+- Paths have leading ./ or are absolute: provide clean, root-relative paths.
+- No trailing newline: add one to the patch text.
+- Wrong strip level: auto-detect tries 1,0,2,3,4; if it fails, specify strip explicitly.
+- Trying to add/delete via patch: use write/delete tasks instead.
+
+Caution on apply_direct
+- apply_direct writes full-file "plain content" updates directly when the diff cannot be applied and the input looks like a full replacement. It makes timestamped backups before overwriting.
+- Prefer using patch (diff) for updates; reserve apply_direct for last-resort plain-content updates. Do not rely on apply_direct for creating or removing files—use write/delete tasks instead.
+
+Inputs
+- patch (required): Patch content (unified diff or ChatGPT-style)
+- strip: Integer -pN. If omitted, auto-detects via --dry-run
+- dry_run: Boolean. If true, checks only; does not modify files
+- apply_direct: Boolean. If true, when patch diffing fails and the block looks like a full-file replacement, write the file directly (with backups)
+
+Outputs
+- JSON with:
+  - stdout, stderr, exit_status
+  - generated_patch (canonical unified diff we produced)
+  - used_strip (integer or null)
+  - tried_strips ([{strip, stdout, stderr, exit_status}])
+  - applied (boolean)
+  - applied_directly (boolean)
+  - suggestion (string)
+
+Notes
+- To add and remove entire files please use write and delete tasks, not patch.
+- All paths are validated and must remain under the root (current directory of the process) (".." is disallowed). Absolute paths are normalized against the root when possible.
+- When apply_direct is used, existing files are backed up to .bak.<timestamp> and writes are atomic (tmp file then rename).
+
+## current_time
+Return current time as string
+
+Returns the current system time formatted by Ruby's Time.now.to_s. Exported for direct execution (export_exec :current_time). Takes no inputs and returns a plain string for quick checks.
+
+Example
+```
+ComputerUse.current_time # => "2026-02-03 11:00:00 +0000"
+```
+
+## tsv_info
+Inspect a TSV and optionally update selected metadata or representation in the source file. Returns JSON containing `key_field`, `fields`, `type`, `cast`, `namespace`, `identifiers`, `source_rows`, `unique_keys`, `entity_field_candidates`, and `registered_entity_formats`.
+
+Required input: `file`.
+
+Optional opening inputs: `key_field`, `fields`, `type`, `sep` (default tab), `sep2` (default `|`), `header_hash` (default `#`), `merge` (`true`, `false`, or `concat`), and `one2one` (default false). These control source interpretation while inspecting. `type` is an opening override; allowed types are `single`, `list`, `flat`, and `double`.
+
+Optional metadata/update inputs: `new_key_field`, `rename_fields`, `cast` (`to_i` or `to_f`), `new_type` (`single`, `list`, `flat`, or `double`), `namespace`, and `identifiers` (path to identifier metadata). Supplying any of these requests an in-place rewrite of the source; without them `tsv_info` is read-only. `new_key_field` and `rename_fields` rename table metadata; `new_type` converts the representation. Empty or omitted metadata values do not clear existing metadata. Source updates require a writable regular non-symlink file and writable parent directory, and use an atomic same-directory replacement. Invalid options or an unsafe source raise `ParameterException` without replacing the source.
+
+`entity_field_candidates` lists fields whose names are registered in `Entity.formats`; it is a name-based candidate list, not proof that every cell contains valid entity identifiers. The reported row/key counts describe the table materialized by the chosen opening options, so duplicate-key merging affects the counts.
+
+## tsv_read
+Read a source table and return normalized Scout TSV text. Required input: `file`.
+
+Opening inputs include `keys` (exact keys to retain; empty means all), `key_field`, `fields`, `type` (default `double`), `sep` (default tab), `sep2` (default `|`), `header_hash` (default `#`; set to an empty string if no marker precedes the header), `cast`, `select`, `grep`, `merge` (default true; also accepts false or concat), `one2one`, `field`, `identifiers`, `namespace`, and `persist` (default false). These are applied while interpreting the source. A comma separator uses CSV loading; the output is still Scout TSV. `persist: true` uses HDB persistence under the task's own `.files` area rather than an arbitrary caller-supplied path.
+
+Output metadata can additionally be set with `new_key_field` and `rename_fields`. The result uses canonical tab-separated columns, pipe-separated multi-values, and `#`-marked headers/preamble, ready for downstream TSV tasks. Requested `keys` are retained only when found and emitted in deterministic sorted order. `select` and `grep` are Scout TSV filters. Cast values are restricted to `to_i` or `to_f`; consult `tsv_info` or read a small result when deciding whether a cast is appropriate.
+
+Example: normalize a CSV with a plain header, then query the normalized result:
+
+```ruby
+normalized = ComputerUse.job(:tsv_read, nil,
+  file: "download.csv", sep: ",", header_hash: "", type: "double").run
+File.write("prepared.tsv", normalized)
+answer = ComputerUse.job(:tsv_query, nil,
+  file: "prepared.tsv", keys: ["A123"]).run
+```
+
+## tsv_query
+Fetch exact key values from a prepared Scout TSV. Required inputs: `file` and `keys` (array of key strings). Returns a JSON object with table `key_field`, `fields`, `type`, selected `column`, `queries` in request order, and `missing_keys`. Each query entry has `key`, `found`, and `value`; missing keys retain their request position and have a null value.
+
+Optional inputs are `key_field`, `fields`, `type`, `cast` (`to_i` or `to_f`), `column`, `merge`, `one2one`, and Scout's convenience `field`. `column: "key"` selects the queried key itself; otherwise `column` must name a value field. `field` and `column` cannot be used together. Cast applies recursively to returned values, whether or not a column is selected. Named-column queries on flat TSVs are rejected because flat rows do not provide named field boundaries. Unknown fields and invalid casts raise `ParameterException`.
+
+## tsv_edit
+Edit one existing key in place and return the updated Scout TSV text. Required inputs: `file` and `key`. Specify exactly one edit form:
+
+- Field edit: `field` plus `value`. Named-field edits are supported for `single`, `list`, and `double` tables; `flat` does not support named-field editing. For a double-valued field, the replacement string is split on `|` into its values.
+- Whole-row edit: `row` is a JSON string whose shape must match the TSV type. A `single` row is a scalar; a `list` row is an array with one scalar per field; a `double` row is an array of value-arrays, one per field; a `flat` row is an array of scalars. JSON row values must be scalars (or arrays in the double shape), and row lengths are checked against the table metadata.
+
+Optional `type` overrides the declared type for parsing. The key and named field must exist. The source must be a writable regular non-symlink file. Changes are validated before an atomic same-directory rewrite; invalid edits leave the source unchanged. The task does not create an alternate edited source: use the harness result path only to inspect or retain the task's returned output.
+
+## tsv_merge
+Merge two prepared TSV files and return the new Scout TSV text; inputs are not modified. Required inputs: `left` and `right`. Optional `strategy` is `replace` (default) or `zip`.
+
+Both tables must have identical `key_field`, `fields`, `type`, and compatible annotation metadata (`namespace`, `identifiers`, `serializer`, and `entity_options`). With `replace`, right-side rows replace the entire row for any key present on the right, while left-only keys remain. With `zip`, values are combined using Scout's `zip_new` behavior; this is supported only for `double` tables. Incompatible tables and unknown strategies raise `ParameterException`.
+
+## tsv_attach
+Attach selected fields from a right-hand prepared TSV to a source table on an exact key/field match, returning new Scout TSV text without modifying either input. Required inputs: `source`, `other`, `match_key` (source key or field), and `other_key` (right key or field). Optional `fields` selects right-side fields; by default, all right value fields except the matching field are attached. `one2one` defaults to true.
+
+Flat TSVs are unsupported. A right-side value-field match requires a list or double right table. Requested fields must be existing right value fields and must not collide with source fields. Repeated right-side match values are rejected. The attach is incomplete (`complete: false`): source rows without a match remain, with empty attached values. Scout `TSV.attach` is applied to a copy because it mutates its source table.
+
+## tsv_translate
+Translate a key or value field using a prepared TSV and an explicit identifier mapping; return a new Scout TSV text without modifying the source. Required inputs: `file`, `field`, `target_format`, and `identifiers` (mapping TSV path). Optional inputs: `type`, `key_field`, `fields`, and `one2one` (default false). Uses Scout `TSV.translate`; the requested field and target format must be interpretable by the mapping. Mapping and source files are expected to be in canonical Scout TSV form.
+
+## tsv_sort
+Sort a prepared Scout TSV with Scout's `TSV#page` implementation. Required input: `file`. Optional inputs are `column` (value field or `key`, default `key`), `direction` (`ascending` or `descending`), `page` (1-based, default 1), `page_size` (positive row count; omitted means all keys), `cast` (`to_i` or `to_f` for numeric value-field sorting), and `just_keys` (default false).
+
+When `just_keys` is false, the JSON result includes the selected page as canonical Scout TSV text in `tsv`, together with the selected column, direction, page number, effective page size and total key count. When true, `keys` contains the page's ordered keys instead. The full TSV preserves this sorted key order (rather than the receiver's original order). Sorting by a value field uses its first value for list/double rows, following Scout's `TSV#page`/`sort_by` behavior; `cast` changes that comparison value to integer or float, with Ruby's `to_i`/`to_f` conversion semantics. Sorting by `key` orders on the key and ignores `cast`. Unknown fields, invalid casts/directions and non-positive page numbers or sizes are rejected; a page beyond the available rows returns an empty page. Value-field sorting on flat TSVs is unsupported.
